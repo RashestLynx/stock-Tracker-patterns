@@ -1,0 +1,69 @@
+name: Nightly pattern scan
+
+on:
+  schedule:
+    - cron: "17 7 * * 2-6"   # 1:17 am Chicago (winter), Tue–Sat: after each trading day's data is out
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["*.py", ".github/workflows/scan.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy
+
+      - name: Tests
+        run: |
+          python tests/test_patterns.py
+          python tests/test_scan_offline.py
+
+      # Two years of daily prices are kept between runs, so each night only downloads the newest day.
+      # The first run downloads everything (about 100 minutes on Massive's free plan).
+      - name: Restore price cache
+        uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: prices-${{ github.run_id }}
+          restore-keys: prices-
+
+      - name: Scan every stock
+        env:
+          MASSIVE_KEY: ${{ secrets.MASSIVE_KEY }}
+          BARGO_KEY: ${{ secrets.BARGO_KEY }}
+          SEC_USER_AGENT: "StockTracker pattern scanner stocktracker-scanner@users.noreply.github.com"
+        run: python scan.py
+
+      # Saved even if the scan failed partway, so a long first download isn't lost.
+      - name: Save price cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cache
+          key: prices-${{ github.run_id }}
+
+      - name: Publish results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || gh release create latest --title "Latest scan" --notes "Nightly pattern scan results. The app downloads patterns.json.gz from here."
+          gh release upload latest out/patterns.json.gz --clobber
+          python - <<'E'
+          import gzip, json
+          r = json.load(gzip.open("out/patterns.json.gz", "rt"))
+          n = sum(len(s["hits"]) for s in r["stocks"].values())
+          print(f"::notice title=Scan results::{r['date']}: {r['stocks_scanned']} stocks scanned, {len(r['stocks'])} with signals, {n} signals, {r['days_of_history']} days of history")
+          E
