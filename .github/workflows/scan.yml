@@ -65,5 +65,5 @@ jobs:
           import gzip, json
           r = json.load(gzip.open("out/patterns.json.gz", "rt"))
           n = sum(len(s["hits"]) for s in r["stocks"].values())
-          print(f"::notice title=Scan results::{r['date']}: {r['stocks_scanned']} stocks scanned, {len(r['stocks'])} with signals, {n} signals, {r['days_of_history']} days of history")
+          print(f"::notice title=Scan results::{r['date']}: {r['stocks_scanned']} stocks scanned, {sum(1 for s in r['stocks'].values() if s['hits'])} with signals, {n} signals, {r['days_of_history']} days of history")
           E

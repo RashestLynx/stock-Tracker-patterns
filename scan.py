@@ -196,6 +196,13 @@ def main():
         patterns_out[p] = {"name": name, "kind": kind, "mood": mood, "desc": desc, **summary(stats[p])}
 
     stocks_out = {}
+    # Every scanned stock gets its price levels, so the app can alert live when one breaks (even with no pattern).
+    for t, (o, h, l, c, v, idx) in universe.items():
+        def r(x):
+            return round(float(x), 4)
+        stocks_out[t] = {"price": r(c[-1]), "chg": r(c[-1] / c[-2] - 1) if len(c) > 1 else 0,
+                         "hi20": r(h[-21:-1].max()), "lo20": r(l[-21:-1].min()),
+                         "hi52": r(h[-253:-1].max()), "lo52": r(l[-253:-1].min()), "hits": []}
     for t, lst in hits.items():
         rows = []
         for item in lst:
@@ -210,9 +217,7 @@ def main():
                 if s["n"]:
                     row["own"] = s
             rows.append(row)
-        o, h, l, c, v, idx = universe[t]
-        stocks_out[t] = {"price": round(float(c[-1]), 4), "chg": round(float(c[-1] / c[-2] - 1), 4) if len(c) > 1 else 0,
-                         "hits": rows}
+        stocks_out[t]["hits"] = rows
 
     result = {
         "date": days[-1].isoformat(),
@@ -227,7 +232,8 @@ def main():
     with gzip.open(os.path.join(OUT, "patterns.json.gz"), "wt") as f:
         json.dump(result, f, separators=(",", ":"))
     n_hits = sum(len(s["hits"]) for s in stocks_out.values())
-    print(f"Done: {len(universe)} stocks scanned, {len(stocks_out)} with signals, {n_hits} signals, "
+    with_hits = sum(1 for s in stocks_out.values() if s["hits"])
+    print(f"Done: {len(universe)} stocks scanned, {with_hits} with signals, {n_hits} signals, "
           f"{os.path.getsize(os.path.join(OUT, 'patterns.json.gz')) / 1024:.0f} KB")
     best = sorted(((p, s) for p, s in patterns_out.items() if s.get("n", 0) >= 200),
                   key=lambda kv: -kv[1]["avg"] * kv[1]["mood"] if kv[1]["mood"] else 0)

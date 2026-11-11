@@ -34,3 +34,5 @@ print(r["date"], r["stocks_scanned"], len(r["stocks"]))
 print(json.dumps(r["stocks"].get("TBA"), indent=0)[:600])
 print({k: v for k, v in list(r["patterns"].items())[:3]})
 assert "BAD-W" not in r["stocks"] and "low" not in r["stocks"]
+s = r["stocks"]["TBA"]; assert s["lo20"] <= s["hi20"] and s["lo52"] <= s["lo20"] and s["hi52"] >= s["hi20"], s
+print("levels ok")
