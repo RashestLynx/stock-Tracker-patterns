@@ -29,8 +29,11 @@ import numpy as np
 SEC_UA = os.environ.get("SEC_USER_AGENT") or "StockTracker-Scanner admin@example.com"
 M = 1_000_000.0
 REVENUE = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"]
-DIVIDENDS = ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"]
-UNITS = {"EarningsPerShareDiluted": "USD-per-shares", "WeightedAverageNumberOfDilutedSharesOutstanding": "shares"}
+DIVIDENDS = ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends", "PaymentsOfOrdinaryDividends",
+             "DividendsCommonStockCash", "DividendsCommonStock", "Dividends"]
+DIV_PER_SHARE = ["CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"]
+UNITS = {"EarningsPerShareDiluted": "USD-per-shares", "WeightedAverageNumberOfDilutedSharesOutstanding": "shares",
+         "CommonStockDividendsPerShareDeclared": "USD-per-shares", "CommonStockDividendsPerShareCashPaid": "USD-per-shares"}
 LETTERS = [(97, "A+"), (90, "A"), (84, "A-"), (77, "B+"), (69, "B"), (61, "B-"), (53, "C+"), (45, "C"), (37, "C-"),
            (29, "D+"), (21, "D"), (13, "D-"), (0, "F")]
 _last = [0.0]
@@ -256,6 +259,12 @@ def fundamentals(sec, companies, fy, balance_periods):
         if sp and sn and sp > 0 and -0.3 < sn / sp - 1 < 0.4:
             f["dilution"] = sn / sp - 1
         div = {k: abs(v) for k, v in series(DIVIDENDS, cik, range(y - 9, y + 1)).items()}
+        if y not in div:
+            # Some companies only report dividends per share: times shares outstanding.
+            dps = series(DIV_PER_SHARE, cik, range(y - 9, y + 1))
+            sh = f["shares"]
+            if sh and dps.get(y):
+                div = {k: v * sh for k, v in dps.items() if v > 0}
         f["div"] = div
         d = div.get(y)
         if d and d > 0:
@@ -406,6 +415,11 @@ def grade_all(companies, fund, prices, insiders=None):
     income = composite(payers, INCOME)
     icaps = {}
     for t, r in payers.items():
+        if r["yield"] < 0.01:
+            icaps[t] = "D"    # a token dividend isn't income
+            continue
+        if r["yield"] < 0.02:
+            icaps[t] = "B-"
         if r["yield"] > 0.10 or (r.get("fcf_payout") or 0) > 1.0 or (r.get("div_vs_avg") or 1) < 0.9 \
                 or r.get("div_years", 0) < 5 or r["ni_now"] <= 0:
             icaps[t] = "C-"   # risky: very high yield, not covered by cash, recently cut, short record, or a loss
@@ -533,7 +547,8 @@ def run(cache_dir, days, series, insiders=None):
     grades, stars, rows = grade_all(companies, fund, now_prices, insiders)
     print(f"Grades: {len(grades)} stocks graded (fiscal year {fy})")
 
-    sics = sec.industries([rows[t]["cik"] for t in stars[:60]])
+    sics = sec.industries([rows[t]["cik"] for t in stars[:120]])
+    stars = [t for t in stars if not 6000 <= sics.get(rows[t]["cik"], (0, ""))[0] <= 6799]
     star_list = []
     for t in stars[:30]:
         r = rows[t]
@@ -542,10 +557,12 @@ def run(cache_dir, days, series, insiders=None):
 
     # ---- track record: the same rules as of a year ago, and what happened next ----
     record = {}
-    t0 = n - 1 - 252
+    HOLD = 126   # six months: the price measures need a year of history before the grading day
+    t0 = n - 1 - HOLD
     if t0 >= 260:
         print("Grades: checking how last year's grades did")
-        fund0 = fundamentals(sec, companies, fy - 1, [f"CY{fy - 1}Q4I"])
+        # Six months ago the same fiscal year's annual reports were already out (they're filed by about March).
+        fund0 = fundamentals(sec, companies, fy, [f"CY{fy}Q4I"])
         p0 = prices_at(t0)
         g0, stars0, rows0 = grade_all(companies, fund0, p0)
         spy_fwd = float(spy_c[n - 1] / spy_c[t0] - 1)
@@ -571,6 +588,8 @@ def run(cache_dir, days, series, insiders=None):
                                 "beat": round(float(np.mean([fwd[x] > spy_fwd for x in v])), 3),
                                 "dd": round(float(np.median([dd[x] for x in v if x in dd])), 4) if any(x in dd for x in v) else None}
                             for b, v in sorted(buckets.items())}
+        sic0 = sec.industries([rows0[x]["cik"] for x in stars0[:120]])
+        stars0 = [x for x in stars0 if not 6000 <= sic0.get(rows0[x]["cik"], (0, ""))[0] <= 6799]
         s0 = [x for x in stars0[:30] if x in fwd]
         record["stars"] = {"n": len(s0), "ret": round(float(np.median([fwd[x] for x in s0])), 4) if s0 else None,
                            "beat": round(float(np.mean([fwd[x] > spy_fwd for x in s0])), 3) if s0 else None,
@@ -578,6 +597,7 @@ def run(cache_dir, days, series, insiders=None):
         record["spy"] = round(spy_fwd, 4)
         record["spy_dd"] = round(spy_dd, 4)
         record["from"] = days[t0].isoformat()
+        record["months"] = 6
 
     return {"date": today.isoformat(), "fy": fy, "graded": len(grades), "grades": grades,
             "stars": star_list, "record": record}
