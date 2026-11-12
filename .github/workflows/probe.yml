@@ -1,0 +1,10 @@
+name: Probe Nasdaq pace
+on:
+  push:
+    paths: ["probe/**", ".github/workflows/probe.yml"]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install numpy && python probe/nasdaq_pace.py
