@@ -27,6 +27,8 @@ HORIZON = 63          # trading days ahead (~3 months)
 STEP = 21             # snapshot every ~month
 LOOKBACK = 126        # trading days of history the price measures need
 MIN_TRAIN = 4         # snapshots needed before the first out-of-sample test
+EMBARGO = STEP        # extra gap between the last training outcome and a test snapshot (purge + embargo)
+GBM_REFIT = 6         # refit the boosted-tree model every 6 test snapshots (it's slower than ridge)
 TICKER = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 SPLITS = np.array([2, 3, 4, 5, 8, 10, 15, 20, 1 / 2, 1 / 3, 1 / 4, 1 / 5, 1 / 8, 1 / 10, 1 / 15, 1 / 20, 3 / 2, 2 / 3])
 
@@ -163,6 +165,24 @@ def fy_for(d):
     return d.year - 1 if (d.month, d.day) >= (4, 15) else d.year - 2
 
 
+def gbm_fit(train, target):
+    """Gradient-boosted trees on the same ranked measures (catches interactions a straight line can't).
+    Returns a predict function, or None if LightGBM isn't installed."""
+    try:
+        import lightgbm as lgb
+    except ImportError:
+        return None
+    Xs = np.vstack([s["X"][s["uni"]] for s in train])
+    ys = np.concatenate([s[target][s["uni"]] for s in train])
+    if len(ys) > 400_000:   # keep fits fast: a random sample is plenty for ~23 measures
+        pick = np.random.default_rng(0).choice(len(ys), 400_000, replace=False)
+        Xs, ys = Xs[pick], ys[pick]
+    m = lgb.LGBMRegressor(n_estimators=200, learning_rate=0.05, num_leaves=15, min_child_samples=500,
+                          subsample=0.5, subsample_freq=1, colsample_bytree=0.8, reg_lambda=5.0, verbose=-1)
+    m.fit(Xs, ys)
+    return m.predict
+
+
 def ridge(X, y, lam):
     k = X.shape[1]
     return np.linalg.solve(X.T @ X + lam * np.eye(k), X.T @ y)
@@ -221,22 +241,40 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
     # ---- walk-forward test ----
     oos = []          # one row per stock per test snapshot
     ics = {"g": [], "w": []}
+    ics_by = {m: {"g": [], "w": []} for m in ("ridge", "trees")}
+    gbm = {}
     tests, spy_fwds = [], []
+
+    def ic(a, b):
+        return float(np.corrcoef(a.argsort().argsort(), b.argsort().argsort())[0, 1])
     for k, s in enumerate(snaps):
         if "fwd" not in s:
             continue
-        train = [p for p in snaps[:k] if "fwd" in p and p["t"] + HORIZON <= s["t"]]
+        # Purge + embargo: only snapshots whose 3-month outcome was over a month before this one.
+        train = [p for p in snaps[:k] if "fwd" in p and p["t"] + HORIZON + EMBARGO <= s["t"]]
         if len(train) < MIN_TRAIN:
             continue
         tests.append(days[s["t"]].isoformat())
         spy_fwds.append(float(s["spy_fwd"]))
         u = s["uni"]
         pr = {}
+        refit = (len(tests) - 1) % GBM_REFIT == 0
         for goal, target in (("g", "y_g"), ("w", "y_w")):
             w = fit(train, target)
-            pr[goal] = ranks(s["X"] @ w, u) + 0.5
-            a, b = pr[goal][u], s[target][u]
-            ics[goal].append(float(np.corrcoef(a.argsort().argsort(), b.argsort().argsort())[0, 1]))
+            r_ridge = ranks(s["X"] @ w, u)
+            if refit or goal not in gbm:
+                gbm[goal] = gbm_fit(train, target)
+            both = r_ridge
+            if gbm[goal] is not None:
+                r_tree = ranks(gbm[goal](s["X"]), u)
+                # Use the trees only once they've proven themselves on EARLIER test snapshots (no peeking).
+                prior_t, prior_r = ics_by["trees"][goal], ics_by["ridge"][goal]
+                if len(prior_t) >= 3 and np.mean(prior_t) > 0.5 * np.mean(prior_r) and np.mean(prior_t) > 0:
+                    both = ranks(r_ridge + r_tree, u)   # average of the two models' ranks
+                ics_by["trees"][goal].append(ic(r_tree[u], s[target][u]))
+            ics_by["ridge"][goal].append(ic(r_ridge[u], s[target][u]))
+            pr[goal] = both + 0.5
+            ics[goal].append(ic(pr[goal][u], s[target][u]))
         inc = income_score(s["raw"]["yield"], pr["g"], pr["w"], u)
         star = star_pick(s["raw"], pr["g"], u)
         for i in np.where(u)[0]:
@@ -250,10 +288,21 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
     w_g, w_w = fit(known, "y_g"), fit(known, "y_w")
     u = today["uni"]
     pg, pw = ranks(today["X"] @ w_g, u), ranks(today["X"] @ w_w, u)
+    for goal in ("g", "w"):
+        t_ic, r_ic = ics_by["trees"][goal], ics_by["ridge"][goal]
+        if not t_ic or not (np.mean(t_ic) > 0.5 * np.mean(r_ic) and np.mean(t_ic) > 0):
+            continue   # trees didn't earn a place in testing
+        f = gbm_fit(known, "y_" + goal)
+        if f is not None:
+            r = ranks(f(today["X"]), u)
+            if goal == "g":
+                pg = ranks(pg + r, u)
+            else:
+                pw = ranks(pw + r, u)
     contrib_g = today["X"] * w_g
     pi = income_score(today["raw"]["yield"], pg + 0.5, pw + 0.5, u)
     return {"tickers": tickers, "uni": u, "pg": pg + 0.5, "pw": pw + 0.5, "pi": pi, "X": today["X"], "raw": today["raw"],
-            "spy_fwds": spy_fwds,
+            "spy_fwds": spy_fwds, "ics_by": ics_by,
             "w_g": dict(zip(names, w_g.round(4).tolist())), "w_w": dict(zip(names, w_w.round(4).tolist())),
             "contrib_g": contrib_g, "contrib_w": today["X"] * w_w, "names": names, "oos": oos, "ics": ics, "tests": tests,
             "snaps": snaps, "C": C}

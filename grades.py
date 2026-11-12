@@ -662,12 +662,14 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                       "months": 3, "method": "model", "cases": n_cases, "snapshots": len(L["tests"]),
                       "base": round(base, 3) if base is not None else None,
                       "ic": {k: round(float(np.mean(v)), 3) for k, v in L["ics"].items() if v},
+                      "ic_by_model": {m: {k: round(float(np.mean(v)), 3) for k, v in d.items() if v} for m, d in L["ics_by"].items()},
                       "weights": {"g": L["w_g"], "w": L["w_w"]},
                       "note": (f"Tested on {len(L['tests'])} monthly snapshots it never trained on "
                                f"({L['tests'][0]} to {L['tests'][-1]}), {n_cases:,} cases, each held 3 months. "
                                f"An average stock beat the S&P 500 {base:.0%} of the time." if L["tests"] else "")}
             print(f"Grades: learned model tested on {len(L['tests'])} snapshots, {n_cases} cases; "
-                  f"rank correlation growth {record['ic'].get('g')}, wealth {record['ic'].get('w')}")
+                  f"rank correlation growth {record['ic'].get('g')}, wealth {record['ic'].get('w')} "
+                  f"(straight-line model {record['ic_by_model']['ridge']}, trees {record['ic_by_model']['trees']})")
             for goal in ("g", "w", "i"):
                 print(f"  {goal}: " + ", ".join(f"{b}: beat {v['beat']:.0%}, median {v['ret']:+.1%} vs S&P, drop {v['dd']:.0%} (n={v['n']})"
                                                for b, v in record[goal].items()))
