@@ -4,12 +4,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "41 16 * * *"   # daily until every stock is cached (each run skips what's already there)
-  push:
-    branches: [main]
-    paths: [".github/workflows/history.yml"]
 
 permissions:
   contents: read
+  actions: write      # to start the next round, or the scan when done
 
 jobs:
   # Nasdaq limits each server address, and every job gets its own, so 12 jobs share the work.
@@ -73,3 +71,16 @@ jobs:
         with:
           path: cache
           key: prices-${{ github.run_id }}
+      # Keep going until every stock is downloaded, then retrain the grades on the full history.
+      - name: Next round or retrain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          have=$(ls cache/hist | wc -l)
+          want=$(curl -sL https://github.com/RashestLynx/stock-Tracker-patterns/releases/download/latest/patterns.json.gz | gunzip | python3 -c "import json,sys; print(len(json.load(sys.stdin)['stocks']) + 1)")
+          echo "::notice title=History::$have of $want stocks downloaded"
+          if [ "$have" -lt $(( want * 98 / 100 )) ]; then
+            gh workflow run history.yml -R ${{ github.repository }} --ref main
+          else
+            gh workflow run scan.yml -R ${{ github.repository }} --ref main
+          fi
