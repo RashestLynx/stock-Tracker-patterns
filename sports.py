@@ -143,12 +143,30 @@ def espn_games(key, path):
     return sorted(games.values())
 
 
+NFL_MOVED = {"OAK": "LV", "SD": "LAC", "STL": "LA"}   # relocated teams keep their rating
+NFL_ESPN = {"LA": "LAR", "WAS": "WSH"}
+EPL_NAMES = {"Man United": "Manchester United", "Man City": "Manchester City", "Nott'm Forest": "Nottingham Forest",
+             "Wolves": "Wolverhampton Wanderers", "Sheffield United": "Sheffield United", "Spurs": "Tottenham Hotspur",
+             "Tottenham": "Tottenham Hotspur", "West Ham": "West Ham United", "Newcastle": "Newcastle United",
+             "Brighton": "Brighton & Hove Albion", "Leicester": "Leicester City", "Leeds": "Leeds United",
+             "Norwich": "Norwich City", "Luton": "Luton Town", "Ipswich": "Ipswich Town", "Sheffield Weds": "Sheffield Wednesday"}
+
+
+def nfl_names():
+    teams = cached("nfl/teams.json.gz", lambda: [
+        {"abbr": t["team"].get("abbreviation"), "name": t["team"].get("displayName")}
+        for sp in (get(f"{ESPN}/football/nfl/teams?limit=100") or {}).get("sports", [])
+        for lg in sp.get("leagues", []) for t in lg.get("teams", [])], keep_days=30) or []
+    return {t["abbr"]: t["name"] for t in teams}
+
+
 def nfl_games():
     def fetch():
         body = get("https://github.com/nflverse/nfldata/raw/master/data/games.csv", raw=True)
         return body.decode() if body else None
     text = cached("nfl/games.csv.json.gz", fetch, keep_days=0.5)
     rows = []
+    names = nfl_names()
     first = date.today().year - SEASONS - 1
     for r in csv.DictReader(io.StringIO(text or "")):
         if not r.get("home_score") or int(r["season"]) < first:
@@ -161,8 +179,9 @@ def nfl_games():
             book = ph / (ph + pa)
         except (KeyError, ValueError, ZeroDivisionError):
             pass
-        rows.append((r["gameday"], r["home_team"], r["away_team"], float(r["home_score"]), float(r["away_score"]),
-                     r.get("location") == "Neutral", r["home_team"], r["away_team"], book))
+        h, a = (NFL_MOVED.get(x, x) for x in (r["home_team"], r["away_team"]))
+        rows.append((r["gameday"], names.get(NFL_ESPN.get(h, h), h), names.get(NFL_ESPN.get(a, a), a), float(r["home_score"]),
+                     float(r["away_score"]), r.get("location") == "Neutral", NFL_ESPN.get(h, h), NFL_ESPN.get(a, a), book))
     return sorted(rows)
 
 
@@ -198,7 +217,8 @@ def fd_games(key):
                     break
                 except (KeyError, ValueError, ZeroDivisionError):
                     continue
-            rows.append((d.isoformat(), h, a, hg, ag, False, h, a, book))
+            h, a = EPL_NAMES.get(h, h), EPL_NAMES.get(a, a)
+            rows.append((d.isoformat(), h, a, hg, ag, False, "", "", book))
     return sorted(rows)
 
 
