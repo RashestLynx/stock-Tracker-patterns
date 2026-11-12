@@ -255,9 +255,12 @@ def upcoming(key, path, games, model, hist, ratings, home_edge, scale, draws, d0
         return []
     today = date.today()
     extra = "&groups=80" if key == "cfb" else "&groups=50" if key == "cbb" else ""
-    j = sports.get(f"{sports.ESPN}/{path}/scoreboard?dates={today:%Y%m%d}-{today + timedelta(days=7):%Y%m%d}&limit=1000{extra}") or {}
+    events = []
+    for k in range(8):   # ESPN answers single days (a date range gets HTTP 400 for most leagues)
+        day = today + timedelta(days=k)
+        events += (sports.get(f"{sports.ESPN}/{path}/scoreboard?dates={day:%Y%m%d}&limit=400{extra}") or {}).get("events", [])
     out = []
-    for ev in j.get("events", []):
+    for ev in events:
         c = (ev.get("competitions") or [{}])[0]
         if ((c.get("status") or {}).get("type") or {}).get("completed"):
             continue
