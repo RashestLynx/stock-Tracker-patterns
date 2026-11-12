@@ -143,6 +143,7 @@ def espn_games(key, path):
     return sorted(games.values())
 
 
+NFL_WX = {}   # (date, home team) -> (temp F, wind mph, rain mm, outdoors) from nflverse
 NFL_MOVED = {"OAK": "LV", "SD": "LAC", "STL": "LA"}   # relocated teams keep their rating
 NFL_ESPN = {"LA": "LAR", "WAS": "WSH"}
 EPL_NAMES = {"Man United": "Manchester United", "Man City": "Manchester City", "Nott'm Forest": "Nottingham Forest",
@@ -180,6 +181,12 @@ def nfl_games():
         except (KeyError, ValueError, ZeroDivisionError):
             pass
         h, a = (NFL_MOVED.get(x, x) for x in (r["home_team"], r["away_team"]))
+        try:
+            outdoor = (r.get("roof") or "") in ("outdoors", "open")
+            NFL_WX[(r["gameday"], names.get(NFL_ESPN.get(h, h), h))] = (
+                float(r["temp"]) if r.get("temp") else None, float(r["wind"]) if r.get("wind") else None, None, outdoor)
+        except ValueError:
+            pass
         rows.append((r["gameday"], names.get(NFL_ESPN.get(h, h), h), names.get(NFL_ESPN.get(a, a), a), float(r["home_score"]),
                      float(r["away_score"]), r.get("location") == "Neutral", NFL_ESPN.get(h, h), NFL_ESPN.get(a, a), book))
     return sorted(rows)
@@ -401,6 +408,9 @@ def learn_league(key, games):
     rec["to"] = games[idx[-1]][0] if idx else ""
     rec["base"] = round(sum(1 for i in idx if games[i][3] > games[i][4]) / max(1, len(idx)), 3)   # how often home won
     preds, seasons_all, ratings = runs[best_now]
+    # kept for the matchup-and-weather layer (matchup.py)
+    learn_league.last = {"runs": runs, "seasons": seasons, "chosen": chosen, "tests": tests, "d_test": d_test,
+                         "best": best_now, "d0": d0}
     return rec, ratings, best_now, d0
 
 
@@ -533,7 +543,22 @@ def main():
             for t in teams:
                 teams[t]["trend"] = tr.get(t, 0)
             inj = injuries(path) if key in ("nfl", "nba", "nhl", "mlb") else {}
-            out["leagues"][key] = {"name": name, "record": rec, "teams": teams, "injuries": inj,
+            up = []
+            try:
+                import matchup
+                margins = [abs(g[3] - g[4]) for g in games if g[3] != g[4]]
+                scale = max(1.0, sum(margins) / max(1, len(margins)))
+                mrec, mmodel, hist, rts = matchup.evaluate(key, games, scale)
+                rec["matchup"] = mrec
+                up = matchup.upcoming(key, path, games, mmodel, hist, rts, H, scale, draws, d0)
+                t = mrec["tested"]
+                print(f"  {name} matchup layer: " + ", ".join(f"{v} logloss {r['logloss']} acc {r['acc']:.1%}" for v, r in t.items())
+                      + f" -> using {mrec['used']}; weather helped: {mrec['weather_helped']}; {len(up)} upcoming games", flush=True)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"::warning title={name} matchup layer failed::{e}")
+            out["leagues"][key] = {"name": name, "record": rec, "teams": teams, "injuries": inj, "upcoming": up,
                                    "home_edge": H, "draw_rate": round(d0, 3) if draws else None, "games": len(games)}
             b = rec.get("books")
             print(f"{name}: {len(games)} games; tested on {rec['tested_seasons']} seasons ({rec['n']} games): favorite won "
