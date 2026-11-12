@@ -43,4 +43,16 @@ print("league with draws:", {k: rec3[k] for k in ("n", "acc", "brier")}, "draw r
 assert rec3["acc"] > 0.45
 t = sports.team_table(league(200, seed=4), ratings, "test")
 one = next(iter(t.values())); print("team row:", {k: one[k] for k in ("elo", "rank", "w", "l", "pf", "pa", "home", "l10", "streak", "sos")})
+# A sport with no off-season (UFC): seasons come from calendar years, so it still gets tested.
+import random as _r
+rnd = _r.Random(9); skill = {f"F{i}": rnd.gauss(0, 200) for i in range(150)}; fights = []; d = date(2019, 1, 5)
+while d < date(2026, 11, 1):
+    names = rnd.sample(list(skill), 24)
+    for x, y in zip(names[::2], names[1::2]):
+        w = rnd.random() < 1 / (1 + 10 ** (-(skill[x] - skill[y]) / 400))
+        fights.append((d.isoformat(), x, y, 1.0 if w else 0.0, 0.0 if w else 1.0, True, x, y, None))
+    d += timedelta(days=7)
+rec4, _, _, _ = sports.learn_league("ufc", fights)
+print("no-off-season sport:", {k: rec4[k] for k in ("n", "acc", "tested_seasons")})
+assert rec4["n"] > 1000 and rec4["acc"] > 0.55, rec4
 print("sports ok")

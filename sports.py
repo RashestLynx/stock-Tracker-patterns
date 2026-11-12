@@ -272,7 +272,7 @@ def season_of(d, gap_starts):
     return sum(1 for g in gap_starts if d >= g)
 
 
-def run_elo(games, K, hfa, revert, draws, mov=True):
+def run_elo(games, K, hfa, revert, draws, mov=True, by_year=False):
     """Runs through games in order. Returns per-game pregame home-win probability (and draw prob) and final ratings."""
     R = {}
     preds = []
@@ -282,7 +282,9 @@ def run_elo(games, K, hfa, revert, draws, mov=True):
     for g in games:
         d, h, a, hs, as_, neutral = g[:6]
         dd = date.fromisoformat(d)
-        if last_date and (dd - last_date).days > 60:   # off-season: pull every rating partway back to average
+        # off-season (or, for sports with no off-season like UFC, a new calendar year):
+        # pull every rating partway back to average
+        if last_date and ((dd.year != last_date.year) if by_year else (dd - last_date).days > 60):
             season += 1
             for t in R:
                 R[t] = 1500 + (R[t] - 1500) * (1 - revert)
@@ -352,25 +354,26 @@ def learn_league(key, games):
     for K in Ks:
         for H in Hs:
             for Rv in Rs:
-                runs[(K, H, Rv)] = run_elo(games, K, H, Rv, draws)
+                runs[(K, H, Rv)] = run_elo(games, K, H, Rv, draws, mov=key != "ufc", by_year=key == "ufc")
     seasons = runs[next(iter(runs))][1]
     last = max(seasons) if seasons else 0
     tests = [s for s in range(2, last + 1)][-3:]   # score the last 3 seasons (each needs earlier seasons to tune on)
-    d0 = 0.0
-    if draws:
-        played = [g for g in games if g[3] == g[4]]
-        d0 = len(played) / max(1, len(games))
-    test_idx, chosen = [], {}
+    def draw_rate(idx):
+        return sum(1 for i in idx if games[i][3] == games[i][4]) / max(1, len(idx)) if draws else 0.0
+    test_idx, chosen, d_test = [], {}, {}
     for s in tests:
         tune = [i for i, x in enumerate(seasons) if 1 <= x < s]
-        best = min(runs, key=lambda p: score_games(games, runs[p][0], tune, draws, d0 / 0.95)["logloss"] or 9)
+        dt = draw_rate(tune)
+        best = min(runs, key=lambda p: score_games(games, runs[p][0], tune, draws, dt / 0.95)["logloss"] or 9)
         chosen[s] = best
         test_idx += [(i, best) for i, x in enumerate(seasons) if x == s]
+        d_test[s] = dt
     # out-of-sample predictions: each test game predicted with settings chosen from earlier seasons only
     oos_pred = {i: runs[p][0][i] for i, p in test_idx}
     idx = sorted(oos_pred)
     preds_full = [oos_pred.get(i, 0.5) for i in range(len(games))]
-    rec = score_games(games, preds_full, idx, draws, d0 / 0.95)
+    d_prior = sum(d_test.values()) / max(1, len(d_test))   # draw rate known before the test seasons
+    rec = score_games(games, preds_full, idx, draws, d_prior / 0.95)
     pairs = [(preds_full[i], 1.0 if games[i][3] > games[i][4] else 0.0) for i in idx if games[i][3] != games[i][4]]
     rec["calibration"] = calibration(pairs)
     # the sportsbooks on the very same games, where odds exist
@@ -389,7 +392,8 @@ def learn_league(key, games):
             rec["books"] = {"n": n, "acc": round(hit / n, 4), "brier": round(br, 4)}
         else:
             rec["books"] = score_games(games, bk, with_book, False)
-        rec["model_same_games"] = score_games(games, preds_full, with_book, draws, d0 / 0.95)
+        rec["model_same_games"] = score_games(games, preds_full, with_book, draws, d_prior / 0.95)
+    d0 = draw_rate(range(len(games)))   # for today's predictions, every game counts
     best_now = min(runs, key=lambda p: score_games(games, runs[p][0], [i for i, x in enumerate(seasons) if x >= 1], draws, d0 / 0.95)["logloss"] or 9)
     rec["settings"] = {"k": best_now[0], "home": best_now[1], "pullback": best_now[2]}
     rec["tested_seasons"] = len(tests)
@@ -533,7 +537,7 @@ def main():
                                    "home_edge": H, "draw_rate": round(d0, 3) if draws else None, "games": len(games)}
             b = rec.get("books")
             print(f"{name}: {len(games)} games; tested on {rec['tested_seasons']} seasons ({rec['n']} games): favorite won "
-                  f"{rec['acc']:.1%}, Brier {rec['brier']}" + (f" | books on same games {b['acc']:.1%}, Brier {b['brier']}; "
+                  f"{(rec['acc'] or 0):.1%}, Brier {rec['brier']}" + (f" | books on same games {b['acc']:.1%}, Brier {b['brier']}; "
                   f"model {rec['model_same_games']['acc']:.1%}" if b else "") + f" | {time.time() - t0:.0f}s", flush=True)
         except Exception as e:
             import traceback
