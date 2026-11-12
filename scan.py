@@ -40,6 +40,13 @@ TICKER = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 _last_call = [0.0]
 
 
+def today_et():
+    """Today's date in New York (GitHub's clock is UTC, which is already tomorrow by evening)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/New_York")).date()
+
+
 def massive_day(d):
     """One trading day for every U.S. stock: {ticker: (o, h, l, c, v)}, or None on a market holiday."""
     path = os.path.join(CACHE, "days", d.isoformat() + ".json.gz")
@@ -59,6 +66,8 @@ def massive_day(d):
             if e.code == 429:
                 time.sleep(30)
                 continue
+            if e.code == 403 and d >= today_et() - timedelta(days=1):
+                return None   # the free plan doesn't serve a day until it's over: not out yet, try tomorrow
             if e.code in (401, 403):
                 sys.exit(f"Massive rejected the key (HTTP {e.code}). Check the MASSIVE_KEY secret.")
             raise
@@ -66,7 +75,7 @@ def massive_day(d):
         raise RuntimeError(f"Massive kept refusing {d}")
     rows = {r["T"]: (r["o"], r["h"], r["l"], r["c"], r["v"]) for r in body.get("results") or []
             if all(k in r for k in ("T", "o", "h", "l", "c", "v"))}
-    if not rows and d >= date.today() - timedelta(days=1):
+    if not rows and d >= today_et() - timedelta(days=1):
         return None  # today's data isn't out yet: don't cache an empty day
     os.makedirs(os.path.dirname(path), exist_ok=True)
     json.dump(rows, gzip.open(path, "wt"))
@@ -75,8 +84,8 @@ def massive_day(d):
 
 def load_market(years=2):
     days, data = [], []
-    d = date.today() - timedelta(days=int(365 * years) - 5)
-    while d <= date.today():
+    d = today_et() - timedelta(days=int(365 * years) - 5)
+    while d <= today_et():
         if d.weekday() < 5:
             rows = massive_day(d)
             if rows:
