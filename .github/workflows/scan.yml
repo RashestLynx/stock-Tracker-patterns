@@ -30,6 +30,7 @@ jobs:
         run: |
           python tests/test_patterns.py
           python tests/test_scan_offline.py
+          python tests/test_grades_offline.py
 
       # Two years of daily prices are kept between runs, so each night only downloads the newest day.
       # The first run downloads everything (about 100 minutes on Massive's free plan).
@@ -61,6 +62,7 @@ jobs:
         run: |
           gh release view latest >/dev/null 2>&1 || gh release create latest --title "Latest scan" --notes "Nightly pattern scan results. The app downloads patterns.json.gz from here."
           gh release upload latest out/patterns.json.gz --clobber
+          if [ -f out/grades.json.gz ]; then gh release upload latest out/grades.json.gz --clobber; fi
           python - <<'E'
           import gzip, json
           r = json.load(gzip.open("out/patterns.json.gz", "rt"))

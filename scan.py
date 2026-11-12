@@ -27,6 +27,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from patterns import PATTERNS, detect  # noqa: E402
 import smart_money  # noqa: E402
+import grades  # noqa: E402
 
 KEY = os.environ.get("MASSIVE_KEY", "").strip()
 CACHE = os.environ.get("CACHE_DIR", "cache")
@@ -183,6 +184,24 @@ def main():
             continue
         for p, note in lst:
             hits.setdefault(t2, []).append([p, 0, note])
+
+    # Letter grades for every stock (growth, income, wealth preservation) and the "next big thing" list.
+    try:
+        insiders = {t.replace("-", "."): 1 for t, lst in sm.items() if any(p.startswith("insider") for p, _ in lst)}
+        g = grades.run(CACHE, days, all_series, insiders)
+        os.makedirs(OUT, exist_ok=True)
+        with gzip.open(os.path.join(OUT, "grades.json.gz"), "wt") as f:
+            json.dump(g, f, separators=(",", ":"))
+        print(f"Grades written: {g['graded']} stocks, {len(g['stars'])} rising stars")
+        for goal, name in (("g", "Growth"), ("i", "Income"), ("w", "Wealth")):
+            rec = g["record"].get(goal) or {}
+            print(f"  {name} grades a year ago -> median return by grade: " +
+                  ", ".join(f"{b} {v['ret']:+.1%} (n={v['n']})" for b, v in rec.items()) +
+                  (f" | S&P 500 {g['record']['spy']:+.1%}" if "spy" in g["record"] else ""))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"::warning title=Grades failed::{e}")
 
     def summary(ex):
         ex = np.array(ex)

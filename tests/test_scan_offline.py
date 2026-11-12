@@ -21,6 +21,7 @@ def massive_day(d):
     if d not in cache: cache[d] = fake_day(d)
     return cache[d]
 scan.massive_day = massive_day
+scan.grades.run = lambda *a, **k: {"graded": 0, "stars": [], "record": {}, "grades": {}}  # tested in test_grades_offline.py
 form4 = """<XML><ownershipDocument><issuer><issuerTradingSymbol>TBA</issuerTradingSymbol></issuer>
 <reportingOwner><reportingOwnerId><rptOwnerName>DOE JANE</rptOwnerName></reportingOwnerId><reportingOwnerRelationship><isOfficer>1</isOfficer><officerTitle>Chief Executive Officer</officerTitle></reportingOwnerRelationship></reportingOwner>
 <nonDerivativeTable><nonDerivativeTransaction><transactionDate><value>2026-11-05</value></transactionDate><transactionCoding><transactionCode>P</transactionCode></transactionCoding>
