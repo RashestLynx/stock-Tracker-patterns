@@ -82,6 +82,14 @@ def daily_history(lat, lon, start, end):
                                                 d.get("precipitation_sum", []), d.get("wind_speed_10m_max", []))}
 
 
+def hourly_rain(lat, lon, start, end):
+    """{"YYYY-MM-DDTHH:00" New York time: rain mm} from Open-Meteo's archive."""
+    u = (f"https://archive-api.open-meteo.com/v1/archive?latitude={lat:.3f}&longitude={lon:.3f}&start_date={start}&end_date={end}"
+         "&hourly=precipitation&timezone=America/New_York")
+    h = (sports.get(u) or {}).get("hourly") or {}
+    return {t: v for t, v in zip(h.get("time", []), h.get("precipitation", [])) if v}
+
+
 def forecast(lat, lon, when):
     """(temp F, wind mph, rain mm) at the hour of `when` (UTC datetime), or None."""
     u = (f"https://api.open-meteo.com/v1/forecast?latitude={lat:.3f}&longitude={lon:.3f}&hourly=temperature_2m,precipitation,"
@@ -97,7 +105,23 @@ def forecast(lat, lon, when):
 def league_weather(key, path, games):
     """{(date, home): (temp, wind, rain, outdoors)} for past games."""
     if key == "nfl":
-        return dict(sports.NFL_WX)
+        # nflverse has kickoff temperature and wind; rain comes from the archive at the home stadium, kickoff to +3 hours.
+        venues = team_venues(key, path)
+        rain = {}
+        start, end = games[0][0], (date.today() - timedelta(days=2)).isoformat()
+        for team, v in venues.items():
+            if not v["indoor"]:
+                rain[team] = sports.cached(f"nfl/rain/{team.replace(' ', '_')}-{start}.json.gz",
+                                           lambda v=v: hourly_rain(v["lat"], v["lon"], start, end), keep_days=1) or {}
+        out = {}
+        for (d, home), w in sports.NFL_WX.items():
+            temp, wind, _, outdoor, kick, neutral = w
+            r = None
+            if outdoor and not neutral and home in rain:
+                hr = int((kick or "13:00")[:2])
+                r = sum(rain[home].get(f"{d}T{h:02d}:00", 0) for h in range(hr, hr + 3))
+            out[(d, home)] = (temp, wind, r, outdoor and not neutral)
+        return out
     if key != "mlb":
         return {}
     venues = team_venues(key, path)
@@ -294,4 +318,62 @@ def upcoming(key, path, games, model, hist, ratings, home_edge, scale, draws, d0
             feats = dict(zip(NAMES, f))
             row["why"] = {k: round(feats[k], 3) for k in ("rest", "form", "season", "h2h")}
         out.append(row)
+    return out
+
+
+CONDITIONS = {   # name -> (test on (temp F, wind mph, rain mm), plain-English label)
+    "rain": (lambda t, w, r: (r or 0) >= 1.0, "in rain"),
+    "cold": (lambda t, w, r: t is not None and t <= 40, "at 40°F or colder"),
+    "heat": (lambda t, w, r: t is not None and t >= 85, "at 85°F or hotter"),
+    "wind": (lambda t, w, r: (w or 0) >= 15, "in wind of 15 mph or more"),
+    "nice": (lambda t, w, r: t is not None and 55 <= t <= 80 and (w or 0) < 10 and (r or 0) < 0.2, "in mild, dry weather"),
+}
+
+
+def weather_splits(games, preds, weather):
+    """For each team, how it did in each kind of weather compared with what the ratings expected before each game
+    (so a strong team winning in the snow doesn't count as a 'snow team'). Home and away outdoor games both count,
+    using the weather where the game was played. z = how unusual the gap is: beyond about 2 it's unlikely to be luck."""
+    acc = {}
+    for i, g in enumerate(games):
+        w = weather.get((g[0], g[1]))
+        if not w or not w[3] or g[3] == g[4]:
+            continue
+        temp, wind, rain = w[0], w[1], w[2]
+        for team, p, won in ((g[1], preds[i], g[3] > g[4]), (g[2], 1 - preds[i], g[4] > g[3])):
+            for c, (test, _) in CONDITIONS.items():
+                if test(temp, wind, rain):
+                    a = acc.setdefault(team, {}).setdefault(c, [0, 0, 0.0, 0.0])
+                    a[0] += 1
+                    a[1] += won
+                    a[2] += p
+                    a[3] += p * (1 - p)
+    out = {}
+    for team, cs in acc.items():
+        rows = {}
+        for c, (n, w, e, v) in cs.items():
+            if n >= 5:
+                rows[c] = {"n": n, "w": w, "exp": round(e, 1), "z": round((w - e) / math.sqrt(v), 2) if v > 0 else 0.0}
+        if rows:
+            out[team] = rows
+    return out
+
+
+def league_weather_effect(games, preds, weather):
+    """Across the whole league: do favorites win less often than the ratings say in each kind of weather?"""
+    out = {}
+    for c, (test, label) in CONDITIONS.items():
+        n = fw = 0
+        fe = 0.0
+        for i, g in enumerate(games):
+            w = weather.get((g[0], g[1]))
+            if not w or not w[3] or g[3] == g[4] or not test(w[0], w[1], w[2]):
+                continue
+            p = preds[i]
+            fav_home = p >= 0.5
+            n += 1
+            fw += (g[3] > g[4]) == fav_home
+            fe += max(p, 1 - p)
+        if n >= 30:
+            out[c] = {"label": label, "n": n, "fav_won": round(fw / n, 3), "fav_expected": round(fe / n, 3)}
     return out

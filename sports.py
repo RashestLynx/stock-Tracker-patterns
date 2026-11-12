@@ -184,7 +184,8 @@ def nfl_games():
         try:
             outdoor = (r.get("roof") or "") in ("outdoors", "open")
             NFL_WX[(r["gameday"], names.get(NFL_ESPN.get(h, h), h))] = (
-                float(r["temp"]) if r.get("temp") else None, float(r["wind"]) if r.get("wind") else None, None, outdoor)
+                float(r["temp"]) if r.get("temp") else None, float(r["wind"]) if r.get("wind") else None, None, outdoor,
+                r.get("gametime") or "13:00", r.get("location") == "Neutral")
         except ValueError:
             pass
         rows.append((r["gameday"], names.get(NFL_ESPN.get(h, h), h), names.get(NFL_ESPN.get(a, a), a), float(r["home_score"]),
@@ -551,6 +552,16 @@ def main():
                 mrec, mmodel, hist, rts = matchup.evaluate(key, games, scale)
                 rec["matchup"] = mrec
                 up = matchup.upcoming(key, path, games, mmodel, hist, rts, H, scale, draws, d0)
+                if key in matchup.WEATHER_LEAGUES:
+                    wx = matchup.league_weather(key, path, games)
+                    preds_now = learn_league.last["runs"][learn_league.last["best"]][0]
+                    splits = matchup.weather_splits(games, preds_now, wx)
+                    for t, rows in splits.items():
+                        if t in teams:
+                            teams[t]["weather"] = rows
+                    rec["weather_effect"] = matchup.league_weather_effect(games, preds_now, wx)
+                    print(f"  {name} weather: {sum(1 for w in wx.values() if w[3])} outdoor games with weather; "
+                          f"{json.dumps(rec['weather_effect'])}", flush=True)
                 t = mrec["tested"]
                 print(f"  {name} matchup layer: " + ", ".join(f"{v} logloss {r['logloss']} acc {r['acc']:.1%}" for v, r in t.items())
                       + f" -> using {mrec['used']}; weather helped: {mrec['weather_helped']}; {len(up)} upcoming games", flush=True)
