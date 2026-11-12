@@ -500,10 +500,15 @@ def star_reasons(r):
 def model_reasons(L, i, goal):
     """The measures that pushed this stock's learned score up or down the most."""
     c = (L["contrib_g"] if goal == "g" else L["contrib_w"])[i]
+    x = L["X"][i]
     names = L["names"]
     order = np.argsort(-c)
-    up = [model.FEATURES[names[k]] for k in order[:2] if c[k] > 0.002]
-    down = [model.FEATURES[names[k]] for k in order[::-1][:1] if c[k] < -0.002]
+
+    def trait(k):   # describe what the stock is, not which way the weight points
+        good, bad = model.FEATURES[names[k]]
+        return good if x[k] >= 0 else bad
+    up = [trait(k) for k in order[:2] if c[k] > 0.002]
+    down = [trait(k) for k in order[::-1][:1] if c[k] < -0.002]
     out = []
     if up:
         out.append("Helped by " + " and ".join(up))
@@ -517,6 +522,7 @@ def apply_model(L, grades, rows, companies, sics_get):
     ix = {t: i for i, t in enumerate(L["tickers"])}
     oos = L["oos"]
     cal = {"g": model.calibration(oos, 0), "w": model.calibration(oos, 1), "i": model.calibration(oos, 2)}
+    line = {"g": model.smooth_odds(oos, 0), "w": model.smooth_odds(oos, 1), "i": model.smooth_odds(oos, 2)}
     def letter(p):
         return next(l for cut, l in LETTERS if p * 100 >= cut)
     for t, e in grades.items():
@@ -543,10 +549,11 @@ def apply_model(L, grades, rows, companies, sics_get):
             if cap and order.index(g) < order.index(cap):
                 g = cap
             e[goal], e[goal + "p"] = g, round(p * 100)
-            tenth = cal[goal][1][min(9, int(p * 10))]
-            if tenth["beat"] is not None and tenth["n"] >= 100:
-                e[goal + "b"] = tenth["beat"]          # measured chance to beat the S&P 500 over 3 months
-                e[goal + "d"] = tenth["dd"]            # typical worst drop over 3 months
+            fit = line[goal]
+            if fit:
+                a, b, c, d = fit
+                e[goal + "b"] = round(min(0.95, max(0.05, a + b * (p - 0.5))), 3)   # measured chance to beat the S&P 500 (3 months)
+                e[goal + "d"] = round(min(0.0, c + d * (p - 0.5)), 4)               # typical worst drop over 3 months
             if goal in ("g", "w"):
                 e["why"][goal] = model_reasons(L, i, goal) + e["why"][goal][:3]
     # Next big thing from the learned growth score

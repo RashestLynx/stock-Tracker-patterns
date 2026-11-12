@@ -30,14 +30,20 @@ MIN_TRAIN = 4         # snapshots needed before the first out-of-sample test
 TICKER = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 SPLITS = np.array([2, 3, 4, 5, 8, 10, 15, 20, 1 / 2, 1 / 3, 1 / 4, 1 / 5, 1 / 8, 1 / 10, 1 / 15, 1 / 20, 3 / 2, 2 / 3])
 
-FEATURES = {   # name -> plain-English label for reasons
-    "mom6": "6-month price trend", "mom1": "last month's move", "vol": "low day-to-day swings",
-    "down_cap": "holding up on the market's down days", "max_dd": "small recent drops", "near_high": "trading near its high",
-    "size": "company size", "liquidity": "heavy trading", "rev_g1": "sales growth", "accel": "growth speeding up",
-    "eps_g": "earnings growth", "margin_trend": "widening margins", "gross_prof": "gross profit vs assets",
-    "roe": "return on equity", "fcf_margin": "free cash flow margin", "fcf_conv": "profits backed by cash",
-    "dilution": "few new shares issued", "equity_ratio": "low debt", "consistency": "steady growth record",
-    "ey": "cheap vs earnings", "bm": "cheap vs book value", "sp": "cheap vs sales", "yield": "dividend yield",
+FEATURES = {   # name -> (what a high rank means, what a low rank means), for plain-English reasons
+    "mom6": ("a strong 6-month trend", "a weak 6-month trend"), "mom1": ("a rise last month", "a drop last month"),
+    "vol": ("calm day-to-day moves", "big day-to-day swings"),
+    "down_cap": ("staying steady when the market falls", "swinging hard with the market"),
+    "max_dd": ("small recent drops", "a deep recent drop"), "near_high": ("trading near its high", "trading far below its high"),
+    "size": ("being a large company", "being a small company"), "liquidity": ("heavy trading", "light trading"),
+    "rev_g1": ("fast sales growth", "slow or falling sales"), "accel": ("growth speeding up", "growth slowing down"),
+    "eps_g": ("rising earnings", "falling earnings"), "margin_trend": ("widening margins", "shrinking margins"),
+    "gross_prof": ("high gross profit vs assets", "low gross profit vs assets"), "roe": ("a high return on equity", "a low return on equity"),
+    "fcf_margin": ("strong free cash flow", "weak free cash flow"), "fcf_conv": ("profits backed by cash", "profits not backed by cash"),
+    "dilution": ("few new shares issued", "many new shares issued"), "equity_ratio": ("low debt", "high debt"),
+    "consistency": ("a steady growth record", "an uneven growth record"), "ey": ("a cheap price vs earnings", "a high price vs earnings"),
+    "bm": ("a cheap price vs book value", "a high price vs book value"), "sp": ("a cheap price vs sales", "a high price vs sales"),
+    "yield": ("a high dividend yield", "a low or no dividend"),
 }
 # measures where lower raw numbers are better are flipped so +rank always means "more of the good thing"
 FLIP = {"vol", "down_cap", "dilution"}
@@ -289,6 +295,23 @@ def calibration(rows, col, outcome="ex"):
         tenths.append({"beat": round(float((ex[m] > 0).mean()), 3) if m.sum() else None,
                        "dd": round(float(np.median(dd[m])), 4) if m.sum() else None, "n": int(m.sum())})
     return by, tenths
+
+
+def smooth_odds(rows, col):
+    """Chance to beat the S&P 500 and typical worst drop as a straight-line function of the score, fit on the
+    out-of-sample cases, so a better score never shows worse odds. Returns (a, b, c, d): beat = a + b*(p-0.5), drop = c + d*(p-0.5)."""
+    arr = np.array(rows, float) if rows else np.zeros((0, 7))
+    p = arr[:, col] - 0.5
+    ex = arr[:, 6] if col == 2 else arr[:, 4]
+    dd = arr[:, 5]
+    ok = np.isfinite(p) & np.isfinite(ex) & np.isfinite(dd)
+    if ok.sum() < 200:
+        return None
+    p, beat, dd = p[ok], (ex[ok] > 0).astype(float), dd[ok]
+    A = np.column_stack([np.ones(len(p)), p])
+    a, b = np.linalg.lstsq(A, beat, rcond=None)[0]
+    c, d = np.linalg.lstsq(A, dd, rcond=None)[0]
+    return float(a), float(b), float(c), float(d)
 
 
 def star_record(rows):
