@@ -2,6 +2,8 @@ name: Download 10-year history
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "41 16 * * *"   # daily until every stock is cached (each run skips what's already there)
   push:
     branches: [main]
     paths: [".github/workflows/history.yml"]
@@ -9,30 +11,62 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: scan          # never at the same time as the nightly scan (they share the cache)
-  cancel-in-progress: false
-
 jobs:
-  history:
+  # Nasdaq limits each server address, and every job gets its own, so 12 jobs share the work.
+  slice:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 200
+    strategy:
+      fail-fast: false
+      matrix:
+        k: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install numpy
+      - name: Restore cache (to skip stocks already downloaded)
+        uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: prices-none
+          restore-keys: prices-
+      - name: Download this slice
+        run: |
+          touch start.marker
+          python history.py 170 ${{ matrix.k }} 12
+          mkdir -p new
+          find cache/hist -newer start.marker -name '*.json.gz' -exec cp {} new/ \; || true
+          echo "new files: $(ls new | wc -l)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hist-${{ matrix.k }}
+          path: new/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  merge:
+    needs: slice
+    if: always()
+    runs-on: ubuntu-latest
+    concurrency:
+      group: scan          # never at the same time as the nightly scan (they share the cache)
+      cancel-in-progress: false
+    steps:
       - name: Restore cache
         uses: actions/cache/restore@v4
         with:
           path: cache
           key: prices-${{ github.run_id }}
           restore-keys: prices-
-      - name: Download
-        run: python history.py 290
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hist-*
+          path: cache/hist
+          merge-multiple: true
+      - run: echo "histories cached: $(ls cache/hist | wc -l)"
       - name: Save cache
-        if: always()
         uses: actions/cache/save@v4
         with:
           path: cache

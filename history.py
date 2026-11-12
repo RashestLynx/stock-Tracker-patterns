@@ -148,9 +148,18 @@ def merged_panel(cache_dir, days, data, tickers):
 
 
 if __name__ == "__main__":
-    # One-off backfill: python history.py <minutes>  (stock list from the latest published scan)
+    # Backfill: python history.py <minutes> [slice] [slices]
+    # The stock list comes from the latest published scan, biggest companies first; with slices, each job (its own
+    # server address, which Nasdaq limits separately) takes every n-th stock.
     import sys
-    r = json.load(gzip.open(urllib.request.urlopen(
-        "https://github.com/RashestLynx/stock-Tracker-patterns/releases/download/latest/patterns.json.gz"), "rt"))
+    base = "https://github.com/RashestLynx/stock-Tracker-patterns/releases/download/latest/"
+    pats = json.load(gzip.open(urllib.request.urlopen(base + "patterns.json.gz"), "rt"))
+    try:
+        caps = {t: e.get("cap", 0) for t, e in json.load(gzip.open(urllib.request.urlopen(base + "grades.json.gz"), "rt"))["grades"].items()}
+    except Exception:
+        caps = {}
+    order = sorted(set(pats["stocks"]) | {"SPY"}, key=lambda t: (t != "SPY", -caps.get(t, 0), t))
     mins = int(sys.argv[1]) if len(sys.argv) > 1 else 280
-    backfill(sorted(r["stocks"]) + ["SPY"], os.environ.get("CACHE_DIR", "cache"), budget_s=mins * 60)
+    k, n = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else (0, 1)
+    mine = order[k::n] + (["SPY"] if k else [])
+    backfill(mine, os.environ.get("CACHE_DIR", "cache"), budget_s=mins * 60)
