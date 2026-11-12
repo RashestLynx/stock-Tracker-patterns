@@ -65,7 +65,9 @@ jobs:
           pattern: hist-*
           path: cache/hist
           merge-multiple: true
-      - run: echo "histories cached: $(ls cache/hist | wc -l)"
+      - name: Count
+        run: |
+          echo "histories cached: $(ls cache/hist | wc -l)"
       - name: Save cache
         uses: actions/cache/save@v4
         with:
