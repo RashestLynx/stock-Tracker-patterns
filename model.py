@@ -50,7 +50,7 @@ FLIP = {"vol", "down_cap", "dilution"}
 
 
 def build_panel(days, data):
-    """Close/volume matrices (stocks x days) for every ticker that ever traded, split-adjusted, forward-filled."""
+    """Close/volume matrices (stocks x days) for every ticker in the Massive days, split-adjusted, forward-filled."""
     tickers = sorted({t for d in data for t in d if TICKER.match(t)})
     ix = {t: i for i, t in enumerate(tickers)}
     n, N = len(days), len(tickers)
@@ -62,7 +62,14 @@ def build_panel(days, data):
             if i is not None and row[3] > 0:
                 C[i, j] = row[3]
                 V[i, j] = row[4]
-    # Cached days were downloaded unadjusted: undo jumps that match a stock split exactly.
+    C, V, first = clean_panel(C, V)
+    return tickers, C, V, first
+
+
+def clean_panel(C, V):
+    """Undoes jumps that exactly match a stock split (cached days and the Nasdaq/Massive seam aren't adjusted alike),
+    then carries the last price over missing days and after a stock stops trading."""
+    N, n = C.shape
     for i in range(N):
         row = C[i]
         ok = np.where(np.isfinite(row))[0]
@@ -76,19 +83,13 @@ def build_panel(days, data):
                 s = hit[0]
                 row[:ok[k + 1]] /= s
                 V[i, :ok[k + 1]] *= s
-    # Missing days (halts) and days after a stock stopped trading keep the last price.
-    first = np.full(N, n, int)
-    for i in range(N):
-        ok = np.where(np.isfinite(C[i]))[0]
-        if len(ok):
-            first[i] = ok[0]
-            last = C[i, ok[0]]
-            for j in range(ok[0], n):
-                if np.isfinite(C[i, j]):
-                    last = C[i, j]
-                else:
-                    C[i, j] = last
-    return tickers, C, V, first
+    good = np.isfinite(C)
+    first = np.where(good.any(axis=1), good.argmax(axis=1), n)
+    idx = np.where(good, np.arange(n), 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    C = C[np.arange(N)[:, None], idx]
+    C[np.arange(n)[None, :] < first[:, None]] = np.nan
+    return C, V, first
 
 
 def ranks(x, mask):
@@ -167,9 +168,14 @@ def ridge(X, y, lam):
     return np.linalg.solve(X.T @ X + lam * np.eye(k), X.T @ y)
 
 
-def learn(days, data, companies, fund_by_fy, spy_ticker="SPY"):
-    """Returns dict with today's model scores, weights, and out-of-sample results. See module docstring."""
-    tickers, C, V, first = build_panel(days, data)
+def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
+    """Returns dict with today's model scores, weights, and out-of-sample results. See module docstring.
+    panel: optional (dates, tickers, C, V) with longer history; otherwise built from the Massive days."""
+    if panel is not None:
+        days, tickers, C, V = panel
+        C, V, first = clean_panel(C, V)
+    else:
+        tickers, C, V, first = build_panel(days, data)
     n = len(days)
     si = tickers.index(spy_ticker)
     spy = C[si]
@@ -199,10 +205,18 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY"):
             snap["y_w"] = ranks(snap["dd"], uni)
         snaps.append(snap)
 
+    # Each snapshot's X'X and X'y, so refitting on any set of snapshots is just a sum.
+    for s in snaps:
+        if "fwd" in s:
+            Xu = s["X"][s["uni"]]
+            s["xtx"], s["m"] = Xu.T @ Xu, len(Xu)
+            s["xty_g"], s["xty_w"] = Xu.T @ s["y_g"][s["uni"]], Xu.T @ s["y_w"][s["uni"]]
+
     def fit(train, target):
-        Xs = np.vstack([s["X"][s["uni"]] for s in train])
-        ys = np.concatenate([s[target][s["uni"]] for s in train])
-        return ridge(Xs, ys, lam=0.05 * len(ys))
+        A = sum(s["xtx"] for s in train)
+        b = sum(s["xty_" + target[-1]] for s in train)
+        m = sum(s["m"] for s in train)
+        return np.linalg.solve(A + 0.05 * m * np.eye(A.shape[0]), b)
 
     # ---- walk-forward test ----
     oos = []          # one row per stock per test snapshot

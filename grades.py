@@ -26,6 +26,7 @@ from datetime import date, timedelta
 
 import numpy as np
 
+import history
 import model
 
 SEC_UA = os.environ.get("SEC_USER_AGENT") or "StockTracker-Scanner admin@example.com"
@@ -80,7 +81,9 @@ class Sec:
         if key in self.mem:
             return self.mem[key]
         path = os.path.join(self.dir, f"{tag}_{period}.json")
-        if os.path.exists(path) and time.time() - os.path.getmtime(path) < 6 * 86400:
+        m = re.match(r"CY(\d{4})", period)
+        keep = 60 if m and int(m.group(1)) <= date.today().year - 3 else 6
+        if os.path.exists(path) and time.time() - os.path.getmtime(path) < keep * 86400:
             vals = json.load(open(path))
         else:
             unit = UNITS.get(tag, "USD")
@@ -563,7 +566,7 @@ def apply_model(L, grades, rows, companies, sics_get):
     return cal, cands
 
 
-def run(cache_dir, days, series, insiders=None, data=None):
+def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
     """days: [date]; series: {ticker: (o, h, l, c, v, idx)} from scan.py. Returns the grades file contents."""
     sec = Sec(cache_dir)
     companies = sec.companies()
@@ -627,10 +630,24 @@ def run(cache_dir, days, series, insiders=None, data=None):
     # ---- learned model: fit to history and tested on months it never saw ----
     if data is not None:
         try:
-            need = {model.fy_for(d) for d in days[model.LOOKBACK:]}
+            panel, span = None, days
+            if hist_tickers:
+                try:
+                    want = sorted(set(hist_tickers) | {"SPY"})
+                    have = history.backfill(want, cache_dir, budget_s=int(os.environ.get("HISTORY_BUDGET", "4200")))
+                    if have >= 0.9 * len(want):
+                        all_t = sorted({t for d in data for t in d if model.TICKER.match(t)} | set(want))
+                        dates, C, V = history.merged_panel(cache_dir, days, data, all_t)
+                        panel, span = (dates, all_t, C, V), dates
+                        print(f"Grades: training on {len(dates)} trading days ({dates[0]} to {dates[-1]})")
+                    else:
+                        print(f"Grades: long history still downloading ({have} of {len(want)}); using 2 years for now")
+                except Exception as e:
+                    print(f"::warning title=Long price history failed, using 2 years::{e}")
+            need = {model.fy_for(d) for d in span[model.LOOKBACK:]}
             print(f"Grades: learning from history (fiscal years {sorted(need)})")
             fund_by_fy = {y: (fund if y == fy else fundamentals(sec, companies, y, [f"CY{y}Q4I"])) for y in need}
-            L = model.learn(days, data, companies, fund_by_fy)
+            L = model.learn(days, data, companies, fund_by_fy, panel=panel)
             cal, cands = apply_model(L, grades, rows, companies, None)
             sics2 = sec.industries([rows[t]["cik"] for t in cands if t in rows])
             picks = [t for t in cands if t in rows and not 6000 <= sics2.get(rows[t]["cik"], (0, ""))[0] <= 6799][:30]

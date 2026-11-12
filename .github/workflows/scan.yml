@@ -32,6 +32,7 @@ jobs:
           python tests/test_scan_offline.py
           python tests/test_grades_offline.py
           python tests/test_model_noleak.py
+          python tests/test_history_offline.py
 
       # Two years of daily prices are kept between runs, so each night only downloads the newest day.
       # The first run downloads everything (about 100 minutes on Massive's free plan).

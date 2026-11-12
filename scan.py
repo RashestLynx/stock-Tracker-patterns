@@ -197,7 +197,7 @@ def main():
     # Letter grades for every stock (growth, income, wealth preservation) and the "next big thing" list.
     try:
         insiders = {t.replace("-", "."): 1 for t, lst in sm.items() if any(p.startswith("insider") for p, _ in lst)}
-        g = grades.run(CACHE, days, all_series, insiders, data=data)
+        g = grades.run(CACHE, days, all_series, insiders, data=data, hist_tickers=list(universe))
         os.makedirs(OUT, exist_ok=True)
         with gzip.open(os.path.join(OUT, "grades.json.gz"), "wt") as f:
             json.dump(g, f, separators=(",", ":"))
