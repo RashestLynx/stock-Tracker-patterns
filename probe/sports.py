@@ -3,25 +3,39 @@ H = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, l
 def get(u):
     try:
         r = urllib.request.urlopen(urllib.request.Request(u, headers=H), timeout=30); return r.status, r.read()
-    except urllib.error.HTTPError as e: return e.code, e.read()[:200]
+    except urllib.error.HTTPError as e: return e.code, e.read()[:300]
     except Exception as e: return type(e).__name__, b""
 E = "https://site.api.espn.com/apis/site/v2/sports"
-for name, path, rng in [("NBA", "basketball/nba", "20250101-20250131"), ("NHL", "hockey/nhl", "20250101-20250131"),
-                        ("MLB", "baseball/mlb", "20250601-20250630"), ("CFB", "football/college-football", "20241101-20241130"),
-                        ("CBB", "basketball/mens-college-basketball", "20250201-20250205"), ("NFL", "football/nfl", "20241101-20241130"),
-                        ("EPL", "soccer/eng.1", "20250101-20250131"), ("MLS", "soccer/usa.1", "20250601-20250630"),
-                        ("UCL", "soccer/uefa.champions", "20250101-20250228"), ("UFC", "mma/ufc", "20250101-20250331")]:
-    extra = "&groups=50" if name in ("CBB",) else "&groups=80" if name == "CFB" else ""
-    code, b = get(f"{E}/{path}/scoreboard?dates={rng}&limit=1000{extra}")
-    n, sample = 0, ""
+tests = [("NBA day", f"{E}/basketball/nba/scoreboard?dates=20250115"),
+         ("NBA range noLimit", f"{E}/basketball/nba/scoreboard?dates=20250101-20250107"),
+         ("NBA season", f"{E}/basketball/nba/scoreboard?dates=2025&seasontype=2"),
+         ("NBA team schedule", f"{E}/basketball/nba/teams/2/schedule?season=2025"),
+         ("NHL day", f"{E}/hockey/nhl/scoreboard?dates=20250115"),
+         ("MLB day", f"{E}/baseball/mlb/scoreboard?dates=20250615"),
+         ("CFB week", f"{E}/football/college-football/scoreboard?dates=20241102&groups=80&limit=300"),
+         ("CBB day", f"{E}/basketball/mens-college-basketball/scoreboard?dates=20250201&groups=50&limit=400"),
+         ("EPL day", f"{E}/soccer/eng.1/scoreboard?dates=20250104"),
+         ("UCL day", f"{E}/soccer/uefa.champions/scoreboard?dates=20250121"),
+         ("core events", "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/seasons/2025/types/2/events?limit=5"),
+         ("UFC athlete", f"{E}/mma/ufc/scoreboard?dates=20250301"),
+         ("kalshi settled", "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=KXNBAGAME&status=settled&limit=5")]
+for name, u in tests:
+    code, b = get(u)
+    info = ""
     if code == 200:
-        j = json.loads(b); ev = j.get("events", []); n = len(ev)
-        if ev:
-            c = ev[0]["competitions"][0]
-            sample = " vs ".join(f"{x.get('team', x.get('athlete', {})).get('displayName', x.get('athlete', {}).get('displayName', '?'))} {x.get('score', '')} home={x.get('homeAway', '')} winner={x.get('winner')}" for x in c.get("competitors", []))
-    print(name, code, "events", n, "|", sample[:200]); sys.stdout.flush()
-for name, u in [("EPL csv", "https://www.football-data.co.uk/mmz4281/2425/E0.csv"), ("MLS csv", "https://www.football-data.co.uk/new/USA.csv"),
-                ("nflverse", "https://github.com/nflverse/nfldata/raw/master/data/games.csv")]:
-    code, b = get(u); print(name, code, len(b), b[:160].replace(b"\n", b" | ") if code == 200 else b"")
-# ESPN team stats endpoint (side-by-side numbers)
-code, b = get(f"{E}/basketball/nba/teams/2/statistics"); print("team stats", code, b[:200])
+        try:
+            j = json.loads(b)
+            if "events" in j and isinstance(j["events"], list):
+                ev = j["events"]; info = f"events {len(ev)}"
+                if ev and "competitions" in ev[0]:
+                    c = ev[0]["competitions"][0]; info += " | " + " vs ".join(f"{x.get('team',{}).get('abbreviation', x.get('athlete',{}).get('displayName','?'))} {x.get('score','')} {x.get('homeAway','')}" for x in c.get("competitors", []))
+                    info += f" | odds keys {list((c.get('odds') or [{}])[0].keys())[:8]}"
+            elif "markets" in j:
+                m = j["markets"]; info = f"markets {len(m)} | " + str({k: m[0].get(k) for k in ('ticker','result','last_price_dollars','previous_price_dollars','close_time')} if m else "")
+            else:
+                info = str(list(j.keys()))[:200] + " " + str(j.get("count", ""))
+        except Exception as e:
+            info = f"parse {e}"
+    else:
+        info = b[:150]
+    print(name, code, info[:300]); sys.stdout.flush()
