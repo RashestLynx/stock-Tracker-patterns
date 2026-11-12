@@ -50,7 +50,19 @@ FEATURES = {   # name -> (what a high rank means, what a low rank means), for pl
     "sue": ("a big jump in quarterly earnings", "a drop in quarterly earnings"),
     "asset_g": ("modest asset growth", "fast asset growth (often a warning sign)"),
     "accruals": ("profits backed by cash flow", "profits running ahead of cash flow"),
+    "ind_mom": ("a strong industry", "a weak industry"),
+    "ind_rel": ("beating its industry", "lagging its industry"),
 }
+INDUSTRY = {"ind_mom", "ind_rel"}
+# Ways to fit the growth model. Each test month uses whichever did best on EARLIER test months, so choosing can't peek.
+VARIANTS = {   # name -> (use industry measures, target, recency weighting)
+    "current": (False, "y_g", None),
+    "industry": (True, "y_g", None),
+    "recent": (False, "y_g", 0.97),
+    "risk_adjusted": (False, "y_ga", None),
+    "all": (True, "y_ga", 0.97),
+}
+MIN_SELECT = 12   # test months of evidence needed before switching away from 'current'
 # measures where lower raw numbers are better are flipped so +rank always means "more of the good thing"
 FLIP = {"vol", "down_cap", "dilution", "asset_g", "accruals"}
 
@@ -247,7 +259,7 @@ def ridge(X, y, lam):
     return np.linalg.solve(X.T @ X + lam * np.eye(k), X.T @ y)
 
 
-def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q=None):
+def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q=None, sic_of=None):
     """Returns dict with today's model scores, weights, and out-of-sample results. See module docstring.
     panel: optional (dates, tickers, C, V) with longer history; otherwise built from the Massive days."""
     if panel is not None:
@@ -273,6 +285,7 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q
         uni &= ~(np.isfinite(ff["size"]) & (ff["size"] < math.log(1e8)))   # skip companies under $100M when size is known
         ff["sue"] = sue_feature(tickers, cik_of, eps_q, days[t], pf["price"])
         allf = {**pf, **ff}
+        allf["ind_mom"], allf["ind_rel"] = industry_momentum(tickers, sic_of, allf["mom6"], uni)
         X = np.column_stack([(-1 if k in FLIP else 1) * ranks(allf[k], uni) for k in names])
         snap = {"t": t, "uni": uni, "X": X, "raw": allf}
         if t + HORIZON <= n - 1:
@@ -283,6 +296,8 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q
             snap["dd"] = np.nanmin(path, axis=1) - 1
             snap["y_g"] = ranks(fwd, uni)
             snap["y_w"] = ranks(snap["dd"], uni)
+            with np.errstate(all="ignore"):
+                snap["y_ga"] = ranks(fwd / np.where(allf["vol"] > 0, allf["vol"], np.nan), uni)   # return per unit of risk
         snaps.append(snap)
 
     # Each snapshot's X'X and X'y, so refitting on any set of snapshots is just a sum.
@@ -291,14 +306,23 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q
             Xu = s["X"][s["uni"]]
             s["xtx"], s["m"] = Xu.T @ Xu, len(Xu)
             s["xty_g"], s["xty_w"] = Xu.T @ s["y_g"][s["uni"]], Xu.T @ s["y_w"][s["uni"]]
+            s["xty_ga"] = Xu.T @ s["y_ga"][s["uni"]]
 
     NEW = {"mom12", "sue", "asset_g", "accruals"}
     base_idx = [i for i, n in enumerate(names) if n not in NEW]
 
-    def fit(train, target, cols=None):
-        A = sum(s["xtx"] for s in train)
-        b = sum(s["xty_" + target[-1]] for s in train)
-        m = sum(s["m"] for s in train)
+    no_ind = [i for i, n in enumerate(names) if n not in INDUSTRY]
+
+    def fit(train, target, cols=None, decay=None):
+        key = "xty_" + target.split("_", 1)[1]
+        if decay:   # newer months count more, so the model adapts when markets change
+            last = max(p["t"] for p in train)
+            wts = [decay ** ((last - p["t"]) / STEP) for p in train]
+        else:
+            wts = [1.0] * len(train)
+        A = sum(wt * s["xtx"] for wt, s in zip(wts, train))
+        b = sum(wt * s[key] for wt, s in zip(wts, train))
+        m = sum(wt * s["m"] for wt, s in zip(wts, train))
         if cols is not None:   # the same model on a subset of measures (to check what the new ones add)
             A, b = A[np.ix_(cols, cols)], b[cols]
             w = np.zeros(len(names))
@@ -310,6 +334,13 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q
     oos = []          # one row per stock per test snapshot
     ics = {"g": [], "w": []}
     ics_by = {m: {"g": [], "w": []} for m in ("ridge", "trees", "without_new")}
+    var_ic = {v: [] for v in VARIANTS}
+    chosen_log = []
+
+    def pick_variant():
+        if len(var_ic["current"]) < MIN_SELECT:
+            return "current"
+        return max(VARIANTS, key=lambda v: np.mean(var_ic[v]))
     gbm = {}
     tests, spy_fwds = [], []
 
@@ -327,9 +358,15 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q
         u = s["uni"]
         pr = {}
         refit = (len(tests) - 1) % GBM_REFIT == 0
+        chosen = pick_variant()
+        chosen_log.append(chosen)
+        var_pred = {}
+        for v, (ind, tgt, dec) in VARIANTS.items():
+            wv = fit(train, tgt, None if ind else no_ind, dec)
+            var_pred[v] = ranks(s["X"] @ wv, u)
         for goal, target in (("g", "y_g"), ("w", "y_w")):
             w = fit(train, target)
-            r_ridge = ranks(s["X"] @ w, u)
+            r_ridge = var_pred[chosen] if goal == "g" else ranks(s["X"] @ w, u)
             if refit or goal not in gbm:
                 gbm[goal] = gbm_fit(train, target)
             both = r_ridge
@@ -344,18 +381,23 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q
             ics_by["without_new"][goal].append(ic(ranks(s["X"] @ fit(train, target, base_idx), u)[u], s[target][u]))
             pr[goal] = both + 0.5
             ics[goal].append(ic(pr[goal][u], s[target][u]))
+        for v in VARIANTS:   # scored after use, so the next month's choice only knows the past
+            var_ic[v].append(ic(var_pred[v][u], s["y_g"][u]))
         inc = income_score(s["raw"]["yield"], pr["g"], pr["w"], u)
         star = star_pick(s["raw"], pr["g"], u)
         moat = moat_score(s["X"], names, u)
+        bal = balanced_score(pr["g"], pr["w"], u)
         for i in np.where(u)[0]:
             y = s["raw"]["yield"][i]
             oos.append((pr["g"][i], pr["w"][i], inc[i], float(star[i]), s["fwd"][i] - s["spy_fwd"], s["dd"][i],
-                        (s["fwd"][i] + (y if np.isfinite(y) else 0) * HORIZON / 252) - s["spy_fwd"], moat[i]))
+                        (s["fwd"][i] + (y if np.isfinite(y) else 0) * HORIZON / 252) - s["spy_fwd"], moat[i], bal[i]))
 
     # ---- final fit on everything known, grade today ----
     known = [s for s in snaps if "fwd" in s]
     today = snaps[-1]
-    w_g, w_w = fit(known, "y_g"), fit(known, "y_w")
+    final = pick_variant()
+    ind, tgt, dec = VARIANTS[final]
+    w_g, w_w = fit(known, tgt, None if ind else no_ind, dec), fit(known, "y_w")
     u = today["uni"]
     pg, pw = ranks(today["X"] @ w_g, u), ranks(today["X"] @ w_w, u)
     for goal in ("g", "w"):
@@ -372,11 +414,42 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q
     contrib_g = today["X"] * w_g
     pi = income_score(today["raw"]["yield"], pg + 0.5, pw + 0.5, u)
     pm = moat_score(today["X"], names, u)
-    return {"tickers": tickers, "uni": u, "pg": pg + 0.5, "pw": pw + 0.5, "pi": pi, "pm": pm, "X": today["X"], "raw": today["raw"],
+    pb = balanced_score(pg + 0.5, pw + 0.5, u)
+    return {"tickers": tickers, "uni": u, "pg": pg + 0.5, "pw": pw + 0.5, "pi": pi, "pm": pm, "pb": pb,
+            "variants": {v: round(float(np.mean(x)), 4) for v, x in var_ic.items() if x}, "variant": final,
+            "variant_log": chosen_log, "X": today["X"], "raw": today["raw"],
             "spy_fwds": spy_fwds, "ics_by": ics_by, "ics": ics, "C": C, "days": days,
             "w_g": dict(zip(names, w_g.round(4).tolist())), "w_w": dict(zip(names, w_w.round(4).tolist())),
             "contrib_g": contrib_g, "contrib_w": today["X"] * w_w, "names": names, "oos": oos, "tests": tests,
             "snaps": snaps, "C": C}
+
+
+def industry_momentum(tickers, sic_of, mom6, uni):
+    """Industry momentum (stocks in rising industries tend to keep rising) and how a stock compares with its industry.
+    Industry = first 2 digits of the SEC industry code; needs 5+ stocks in the industry."""
+    ind = np.full(len(tickers), np.nan)
+    rel = np.full(len(tickers), np.nan)
+    if not sic_of:
+        return ind, rel
+    groups = {}
+    for i, t in enumerate(tickers):
+        code = sic_of.get(t)
+        if uni[i] and code and np.isfinite(mom6[i]):
+            groups.setdefault(code // 100, []).append(i)
+    for g, idx in groups.items():
+        if len(idx) >= 5:
+            m = float(np.mean(mom6[idx]))
+            ind[idx] = m
+            rel[idx] = mom6[idx] - m
+    return ind, rel
+
+
+def balanced_score(pg, pw, uni):
+    """Both at once: the average of the growth and wealth ranks (rises with the market, holds up when it falls)."""
+    out = np.full(len(pg), np.nan)
+    if uni.sum() > 1:
+        out[uni] = ranks(np.where(uni, pg + pw, np.nan), uni)[uni] + 0.5
+    return out
 
 
 def income_score(yld, pg, pw, uni):
@@ -410,8 +483,8 @@ def bucket(p):
 
 def calibration(rows, col, outcome="ex"):
     """Out-of-sample results by letter, and by tenth (each stock's probability). col: 0 growth, 1 wealth, 2 income."""
-    arr = np.array(rows, float) if rows else np.zeros((0, 8))
-    col = 7 if col == 3 else col
+    arr = np.array(rows, float) if rows else np.zeros((0, 9))
+    col = {3: 7, 4: 8}.get(col, col)
     p = arr[:, col]
     ex = arr[:, 6] if col == 2 else arr[:, 4]
     dd = arr[:, 5]
@@ -435,8 +508,8 @@ def calibration(rows, col, outcome="ex"):
 def smooth_odds(rows, col):
     """Chance to beat the S&P 500 and typical worst drop as a straight-line function of the score, fit on the
     out-of-sample cases, so a better score never shows worse odds. Returns (a, b, c, d): beat = a + b*(p-0.5), drop = c + d*(p-0.5)."""
-    arr = np.array(rows, float) if rows else np.zeros((0, 8))
-    col = 7 if col == 3 else col
+    arr = np.array(rows, float) if rows else np.zeros((0, 9))
+    col = {3: 7, 4: 8}.get(col, col)
     p = arr[:, col] - 0.5
     ex = arr[:, 6] if col == 2 else arr[:, 4]
     dd = arr[:, 5]
@@ -451,7 +524,7 @@ def smooth_odds(rows, col):
 
 
 def star_record(rows):
-    arr = np.array(rows, float) if rows else np.zeros((0, 8))
+    arr = np.array(rows, float) if rows else np.zeros((0, 9))
     m = arr[:, 3] > 0
     ex = arr[m, 4]
     ex = ex[np.isfinite(ex)]

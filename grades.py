@@ -545,13 +545,14 @@ def apply_model(L, grades, rows, companies, sics_get):
     cal = {"g": model.calibration(oos, 0), "w": model.calibration(oos, 1), "i": model.calibration(oos, 2)}
     line = {"g": model.smooth_odds(oos, 0), "w": model.smooth_odds(oos, 1), "i": model.smooth_odds(oos, 2)}
     cal["m"], line["m"] = model.calibration(oos, 3), model.smooth_odds(oos, 3)
+    cal["b"], line["b"] = model.calibration(oos, 4), model.smooth_odds(oos, 4)
     def letter(p):
         return next(l for cut, l in LETTERS if p * 100 >= cut)
     for t, e in grades.items():
         i = ix.get(t)
         if i is None or not L["uni"][i]:
             continue
-        for goal, key in (("g", "pg"), ("w", "pw"), ("i", "pi"), ("m", "pm")):
+        for goal, key in (("g", "pg"), ("w", "pw"), ("i", "pi"), ("m", "pm"), ("b", "pb")):
             p = float(L[key][i])
             if not np.isfinite(p):
                 continue
@@ -576,6 +577,8 @@ def apply_model(L, grades, rows, companies, sics_get):
                 a, b, c, d = fit
                 e[goal + "b"] = round(min(0.95, max(0.05, a + b * (p - 0.5))), 3)   # measured chance to beat the S&P 500 (3 months)
                 e[goal + "d"] = round(min(0.0, c + d * (p - 0.5)), 4)               # typical worst drop over 3 months
+            if goal == "b":
+                e["why"]["b"] = (e["why"].get("g") or [])[:2] + (e["why"].get("w") or [])[:2]
             if goal in ("g", "w"):
                 e["why"][goal] = model_reasons(L, i, goal) + e["why"][goal][:3]
     # Next big thing from the learned growth score
@@ -676,7 +679,11 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                             eps_q[(yy, qq)] = sec.frame("EarningsPerShareDiluted", f"CY{yy}Q{qq}")
                         except Exception as e:
                             print(f"  quarterly EPS {yy}Q{qq} failed: {e}")
-            L = model.learn(days, data, companies, fund_by_fy, panel=panel, eps_q=eps_q)
+            # industry of every company (SEC code), for industry momentum; cached a year, new companies fetched
+            sics_all = sec.industries([c for c, _, _ in companies])
+            sic_of = {t: sics_all.get(c, (0, ""))[0] for c, t, _ in companies if sics_all.get(c, (0, ""))[0]}
+            print(f"Grades: industries known for {len(sic_of)} companies")
+            L = model.learn(days, data, companies, fund_by_fy, panel=panel, eps_q=eps_q, sic_of=sic_of)
             cal, cands = apply_model(L, grades, rows, companies, None)
             sics2 = sec.industries([rows[t]["cik"] for t in cands if t in rows])
             picks = [t for t in cands if t in rows and not 6000 <= sics2.get(rows[t]["cik"], (0, ""))[0] <= 6799][:30]
@@ -685,7 +692,8 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                           "g": grades[t].get("g", "")} for t in picks]
             n_cases = len(L["oos"])
             base = float(np.mean([r[4] > 0 for r in L["oos"] if np.isfinite(r[4])])) if L["oos"] else None
-            record = {"g": cal["g"][0], "w": cal["w"][0], "i": cal["i"][0], "m": cal["m"][0], "stars": model.star_record(L["oos"]),
+            record = {"g": cal["g"][0], "w": cal["w"][0], "i": cal["i"][0], "m": cal["m"][0], "b": cal["b"][0],
+                      "variants": L["variants"], "variant": L["variant"], "stars": model.star_record(L["oos"]),
                       "spy": round(float(np.mean(L["spy_fwds"])), 4) if L["spy_fwds"] else None,
                       "from": L["tests"][0] if L["tests"] else "", "to": L["tests"][-1] if L["tests"] else "",
                       "months": 3, "method": "model", "cases": n_cases, "snapshots": len(L["tests"]),
@@ -702,7 +710,7 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                   f"rank correlation growth {record['ic'].get('g')}, wealth {record['ic'].get('w')} "
                   f"(straight-line model {record['ic_by_model']['ridge']}, trees {record['ic_by_model']['trees']}, "
                   f"straight-line without the 4 newest measures {record['ic_by_model']['without_new']})")
-            for goal in ("g", "w", "i", "m"):
+            for goal in ("g", "w", "i", "m", "b"):
                 print(f"  {goal}: " + ", ".join(f"{b}: beat {v['beat']:.0%}, median {v['ret']:+.1%} vs S&P, drop {v['dd']:.0%} (n={v['n']})"
                                                for b, v in record[goal].items()))
             print(f"  next big thing: {record['stars']}")
@@ -711,6 +719,9 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                   f"({st['months_positive']['g']:.0%} of months, t={st['t']['g']}); wealth {st['years_positive']['w']} of "
                   f"{st['years_positive']['of']} years ({st['months_positive']['w']:.0%} of months, t={st['t']['w']}); "
                   f"by year {json.dumps(st['years'])}")
+            from collections import Counter
+            print(f"  growth fitting choices (accuracy on unseen months): {L['variants']}; using now: {L['variant']}; "
+                  f"used over time: {dict(Counter(L['variant_log']))}")
             print(f"  live record: {len(record['live']['saved'])} monthly snapshots saved, {len(record['live']['checked'])} checked so far")
             return {"date": today.isoformat(), "fy": fy, "graded": len(grades), "grades": grades,
                     "stars": star_list, "record": record}
