@@ -48,9 +48,6 @@ jobs:
     needs: slice
     if: always()
     runs-on: ubuntu-latest
-    concurrency:
-      group: scan          # never at the same time as the nightly scan (they share the cache)
-      cancel-in-progress: false
     steps:
       - name: Restore cache
         uses: actions/cache/restore@v4

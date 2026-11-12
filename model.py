@@ -194,6 +194,14 @@ def gbm_fit(train, target):
     if len(ys) > 400_000:   # keep fits fast: a random sample is plenty for ~23 measures
         pick = np.random.default_rng(0).choice(len(ys), 400_000, replace=False)
         Xs, ys = Xs[pick], ys[pick]
+    try:
+        return _gbm(lgb, Xs, ys)
+    except Exception as e:   # trees are optional: never let them stop the grades
+        print(f"  boosted trees skipped: {e}")
+        return None
+
+
+def _gbm(lgb, Xs, ys):
     m = lgb.LGBMRegressor(n_estimators=200, learning_rate=0.05, num_leaves=15, min_child_samples=500,
                           subsample=0.5, subsample_freq=1, colsample_bytree=0.8, reg_lambda=5.0, verbose=-1)
     m.fit(Xs, ys)
