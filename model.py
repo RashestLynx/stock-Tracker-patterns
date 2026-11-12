@@ -46,9 +46,13 @@ FEATURES = {   # name -> (what a high rank means, what a low rank means), for pl
     "consistency": ("a steady growth record", "an uneven growth record"), "ey": ("a cheap price vs earnings", "a high price vs earnings"),
     "bm": ("a cheap price vs book value", "a high price vs book value"), "sp": ("a cheap price vs sales", "a high price vs sales"),
     "yield": ("a high dividend yield", "a low or no dividend"),
+    "mom12": ("a strong 12-month trend", "a weak 12-month trend"),
+    "sue": ("a big jump in quarterly earnings", "a drop in quarterly earnings"),
+    "asset_g": ("modest asset growth", "fast asset growth (often a warning sign)"),
+    "accruals": ("profits backed by cash flow", "profits running ahead of cash flow"),
 }
 # measures where lower raw numbers are better are flipped so +rank always means "more of the good thing"
-FLIP = {"vol", "down_cap", "dilution"}
+FLIP = {"vol", "down_cap", "dilution", "asset_g", "accruals"}
 
 
 def build_panel(days, data):
@@ -116,6 +120,7 @@ def price_features(C, V, spy, t, first):
     f = {
         "mom6": C[:, t - 21] / C[:, w0] - 1,
         "mom1": C[:, t] / C[:, t - 21] - 1,
+        "mom12": (C[:, t - 21] / C[:, t - 252] - 1) if t >= 252 else np.full(len(C), np.nan),
         "vol": np.nanstd(R, axis=1),
         "down_cap": np.nansum(R[:, down], axis=1) / sr[down].sum() if down.any() else np.full(len(C), np.nan),
         "max_dd": np.nanmin(win / np.fmax.accumulate(win, axis=1) - 1, axis=1),
@@ -132,13 +137,14 @@ def fund_features(tickers, cik_of, fund, price):
     """Business measures from one fiscal year's filings, valued at today's price (arrays)."""
     N = len(tickers)
     out = {k: np.full(N, np.nan) for k in ("rev_g1", "accel", "eps_g", "margin_trend", "gross_prof", "roe", "fcf_margin",
-                                           "fcf_conv", "dilution", "equity_ratio", "consistency", "ey", "bm", "sp", "yield", "size")}
+                                           "fcf_conv", "dilution", "equity_ratio", "consistency", "ey", "bm", "sp", "yield", "size",
+                                           "asset_g", "accruals", "sue")}
     for i, t in enumerate(tickers):
         f = fund.get(cik_of.get(t))
         if not f or not np.isfinite(price[i]):
             continue
         for k in ("rev_g1", "eps_g", "margin_trend", "gross_prof", "roe", "fcf_margin", "fcf_conv", "dilution",
-                  "equity_ratio", "consistency"):
+                  "equity_ratio", "consistency", "asset_g", "accruals"):
             v = f.get(k)
             if isinstance(v, (int, float)):
                 out[k][i] = v
@@ -157,6 +163,34 @@ def fund_features(tickers, cik_of, fund, price):
                     out["sp"][i] = f["rev"][y] / cap
                 d = f["div"].get(y)
                 out["yield"][i] = (d / cap) if d else 0.0
+    return out
+
+
+def quarter_for(d):
+    """(year, quarter) of the newest quarter whose 10-Q was public on date d (quarter end + 50 days)."""
+    from datetime import timedelta
+    q = d - timedelta(days=50)
+    return q.year, (q.month - 1) // 3 + 1
+
+
+def sue_feature(tickers, cik_of, eps_q, d, price):
+    """(EPS this quarter - EPS same quarter a year before) / price: the 'earnings surprise' behind post-earnings drift.
+    eps_q: {(year, quarter): {cik: eps}}. Uses the newest quarter that was public on date d (quarter end + 50 days),
+    falling back one quarter if a company hasn't filed it."""
+    out = np.full(len(tickers), np.nan)
+    if not eps_q:
+        return out
+    y, q = quarter_for(d)
+    tries = [(y, q), (y - (q == 1), 4 if q == 1 else q - 1)]
+    for i, t in enumerate(tickers):
+        c = cik_of.get(t)
+        if c is None or not np.isfinite(price[i]) or price[i] <= 0:
+            continue
+        for (yy, qq) in tries:
+            now, before = eps_q.get((yy, qq), {}).get(c), eps_q.get((yy - 1, qq), {}).get(c)
+            if now is not None and before is not None:
+                out[i] = (now - before) / price[i]
+                break
     return out
 
 
@@ -213,7 +247,7 @@ def ridge(X, y, lam):
     return np.linalg.solve(X.T @ X + lam * np.eye(k), X.T @ y)
 
 
-def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
+def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q=None):
     """Returns dict with today's model scores, weights, and out-of-sample results. See module docstring.
     panel: optional (dates, tickers, C, V) with longer history; otherwise built from the Massive days."""
     if panel is not None:
@@ -237,6 +271,7 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
         ff = fund_features(tickers, cik_of, fund, pf["price"])
         uni = has & (pf["price"] >= 3) & (pf["dollar_vol"] >= 1e6) & (np.arange(len(tickers)) != si)
         uni &= ~(np.isfinite(ff["size"]) & (ff["size"] < math.log(1e8)))   # skip companies under $100M when size is known
+        ff["sue"] = sue_feature(tickers, cik_of, eps_q, days[t], pf["price"])
         allf = {**pf, **ff}
         X = np.column_stack([(-1 if k in FLIP else 1) * ranks(allf[k], uni) for k in names])
         snap = {"t": t, "uni": uni, "X": X, "raw": allf}
@@ -257,16 +292,24 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
             s["xtx"], s["m"] = Xu.T @ Xu, len(Xu)
             s["xty_g"], s["xty_w"] = Xu.T @ s["y_g"][s["uni"]], Xu.T @ s["y_w"][s["uni"]]
 
-    def fit(train, target):
+    NEW = {"mom12", "sue", "asset_g", "accruals"}
+    base_idx = [i for i, n in enumerate(names) if n not in NEW]
+
+    def fit(train, target, cols=None):
         A = sum(s["xtx"] for s in train)
         b = sum(s["xty_" + target[-1]] for s in train)
         m = sum(s["m"] for s in train)
+        if cols is not None:   # the same model on a subset of measures (to check what the new ones add)
+            A, b = A[np.ix_(cols, cols)], b[cols]
+            w = np.zeros(len(names))
+            w[cols] = np.linalg.solve(A + 0.05 * m * np.eye(len(cols)), b)
+            return w
         return np.linalg.solve(A + 0.05 * m * np.eye(A.shape[0]), b)
 
     # ---- walk-forward test ----
     oos = []          # one row per stock per test snapshot
     ics = {"g": [], "w": []}
-    ics_by = {m: {"g": [], "w": []} for m in ("ridge", "trees")}
+    ics_by = {m: {"g": [], "w": []} for m in ("ridge", "trees", "without_new")}
     gbm = {}
     tests, spy_fwds = [], []
 
@@ -298,6 +341,7 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
                     both = ranks(r_ridge + r_tree, u)   # average of the two models' ranks
                 ics_by["trees"][goal].append(ic(r_tree[u], s[target][u]))
             ics_by["ridge"][goal].append(ic(r_ridge[u], s[target][u]))
+            ics_by["without_new"][goal].append(ic(ranks(s["X"] @ fit(train, target, base_idx), u)[u], s[target][u]))
             pr[goal] = both + 0.5
             ics[goal].append(ic(pr[goal][u], s[target][u]))
         inc = income_score(s["raw"]["yield"], pr["g"], pr["w"], u)

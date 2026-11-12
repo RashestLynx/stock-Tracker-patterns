@@ -180,6 +180,7 @@ def fundamentals(sec, companies, fy, balance_periods):
     for p in balance_periods:   # newer last, so it wins
         assets.update(sec.frame("Assets", p))
         equity.update(sec.frame("StockholdersEquity", p))
+    assets_prev = sec.frame("Assets", f"CY{fy - 1}Q4I")
 
     y = fy
     out = {}
@@ -236,6 +237,12 @@ def fundamentals(sec, companies, fy, balance_periods):
         if yrs == 3 and ni_sum > 0:
             f["fcf_conv"] = max(-1, min(1.5, fcf_sum / ni_sum))
         a, e = assets.get(cik), equity.get(cik)
+        a_prev = assets_prev.get(cik)
+        if a and a_prev and a_prev > 0:
+            f["asset_g"] = a / a_prev - 1
+        ocf_now = one("NetCashProvidedByUsedInOperatingActivities", y, cik)
+        if a and a > 0 and ocf_now is not None:
+            f["accruals"] = (n0 - ocf_now) / a
         if a and a > 0:
             f["roa"] = n0 / a
             if gp is not None:
@@ -659,7 +666,17 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
             need = {model.fy_for(d) for d in span[model.LOOKBACK:]}
             print(f"Grades: learning from history (fiscal years {sorted(need)})")
             fund_by_fy = {y: (fund if y == fy else fundamentals(sec, companies, y, [f"CY{y}Q4I"])) for y in need}
-            L = model.learn(days, data, companies, fund_by_fy, panel=panel)
+            # quarterly diluted EPS for the earnings-surprise signal (one SEC file per quarter)
+            span_years = range(span[0].year - 1, span[-1].year + 1)
+            eps_q = {}
+            for yy in span_years:
+                for qq in range(1, 5):
+                    if date(yy, 3 * qq, 1) < span[-1]:
+                        try:
+                            eps_q[(yy, qq)] = sec.frame("EarningsPerShareDiluted", f"CY{yy}Q{qq}")
+                        except Exception as e:
+                            print(f"  quarterly EPS {yy}Q{qq} failed: {e}")
+            L = model.learn(days, data, companies, fund_by_fy, panel=panel, eps_q=eps_q)
             cal, cands = apply_model(L, grades, rows, companies, None)
             sics2 = sec.industries([rows[t]["cik"] for t in cands if t in rows])
             picks = [t for t in cands if t in rows and not 6000 <= sics2.get(rows[t]["cik"], (0, ""))[0] <= 6799][:30]
@@ -681,7 +698,8 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                                f"An average stock beat the S&P 500 {base:.0%} of the time." if L["tests"] else "")}
             print(f"Grades: learned model tested on {len(L['tests'])} snapshots, {n_cases} cases; "
                   f"rank correlation growth {record['ic'].get('g')}, wealth {record['ic'].get('w')} "
-                  f"(straight-line model {record['ic_by_model']['ridge']}, trees {record['ic_by_model']['trees']})")
+                  f"(straight-line model {record['ic_by_model']['ridge']}, trees {record['ic_by_model']['trees']}, "
+                  f"straight-line without the 4 newest measures {record['ic_by_model']['without_new']})")
             for goal in ("g", "w", "i", "m"):
                 print(f"  {goal}: " + ", ".join(f"{b}: beat {v['beat']:.0%}, median {v['ret']:+.1%} vs S&P, drop {v['dd']:.0%} (n={v['n']})"
                                                for b, v in record[goal].items()))
