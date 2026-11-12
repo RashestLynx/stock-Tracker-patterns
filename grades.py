@@ -634,7 +634,7 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
             if hist_tickers:
                 try:
                     want = sorted(set(hist_tickers) | {"SPY"})
-                    have = history.backfill(want, cache_dir, budget_s=int(os.environ.get("HISTORY_BUDGET", "4200")))
+                    have = history.backfill(want, cache_dir, budget_s=int(os.environ.get("HISTORY_BUDGET", "2400")))
                     if have >= 0.9 * len(want):
                         all_t = sorted({t for d in data for t in d if model.TICKER.match(t)} | set(want))
                         dates, C, V = history.merged_panel(cache_dir, days, data, all_t)

@@ -1,0 +1,39 @@
+name: Download 10-year history
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/history.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scan          # never at the same time as the nightly scan (they share the cache)
+  cancel-in-progress: false
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy
+      - name: Restore cache
+        uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: prices-${{ github.run_id }}
+          restore-keys: prices-
+      - name: Download
+        run: python history.py 290
+      - name: Save cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cache
+          key: prices-${{ github.run_id }}

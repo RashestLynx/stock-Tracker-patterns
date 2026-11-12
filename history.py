@@ -51,7 +51,7 @@ def fetch(ticker, years=10):
         except urllib.error.HTTPError as e:
             if e.code in (429, 403, 503):
                 _slow.set()
-                time.sleep(15 * (attempt + 1))
+                time.sleep(60 * (attempt + 1))
                 continue
             raise
         except Exception:
@@ -78,7 +78,7 @@ def path(cache_dir, t):
     return os.path.join(cache_dir, "hist", t.replace("/", "_") + ".json.gz")
 
 
-def backfill(tickers, cache_dir, budget_s=4200, threads=4):
+def backfill(tickers, cache_dir, budget_s=4200, threads=1, pause=1.0):
     """Downloads histories not yet cached (SPY first), within a time budget. Returns how many are cached now."""
     os.makedirs(os.path.join(cache_dir, "hist"), exist_ok=True)
     todo = [t for t in ["SPY"] + sorted(set(tickers) - {"SPY"}) if not os.path.exists(path(cache_dir, t))]
@@ -88,18 +88,17 @@ def backfill(tickers, cache_dir, budget_s=4200, threads=4):
     def one(t):
         if time.time() - t0 > budget_s:
             return
-        if _slow.is_set():
-            time.sleep(1.0)
+        time.sleep(pause * (5 if _slow.is_set() else 1))   # Nasdaq blocks rapid or parallel requests
         try:
             h = fetch(t)
         except Exception as e:
-            print(f"  history for {t} failed: {e}")
+            print(f"  history for {t} failed: {e}", flush=True)
             return
         with gzip.open(path(cache_dir, t), "wt") as f:
             json.dump(h, f)
         done[0] += 1
-        if done[0] % 500 == 0:
-            print(f"  {done[0]} histories downloaded, {time.time() - t0:.0f}s")
+        if done[0] % 250 == 0:
+            print(f"  {done[0]} histories downloaded, {time.time() - t0:.0f}s", flush=True)
 
     if todo:
         print(f"History: {len(todo)} stocks to download (budget {budget_s // 60} minutes)")
@@ -146,3 +145,12 @@ def merged_panel(cache_dir, days, data, tickers):
                 C[i, k0 + j] = r[3]
                 V[i, k0 + j] = r[4]
     return dates, C, V
+
+
+if __name__ == "__main__":
+    # One-off backfill: python history.py <minutes>  (stock list from the latest published scan)
+    import sys
+    r = json.load(gzip.open(urllib.request.urlopen(
+        "https://github.com/RashestLynx/stock-Tracker-patterns/releases/download/latest/patterns.json.gz"), "rt"))
+    mins = int(sys.argv[1]) if len(sys.argv) > 1 else 280
+    backfill(sorted(r["stocks"]) + ["SPY"], os.environ.get("CACHE_DIR", "cache"), budget_s=mins * 60)
