@@ -22,7 +22,14 @@ import os
 import urllib.parse
 from datetime import date, datetime, timedelta
 
-import sports
+import sys
+
+# When sports.py runs as a script it's the "__main__" module; use that one (it holds this run's results).
+_main = sys.modules.get("__main__")
+if _main is not None and hasattr(_main, "learn_league") and hasattr(_main, "LEAGUES"):
+    sports = _main
+else:
+    import sports
 
 NAMES = ["elo", "rest", "form", "season", "h2h", "wind", "cold", "rain", "wind_x", "cold_x", "rain_x"]
 WEATHER = {"wind", "cold", "rain", "wind_x", "cold_x", "rain_x"}
