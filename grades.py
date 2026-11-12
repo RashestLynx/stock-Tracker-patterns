@@ -26,7 +26,7 @@ from datetime import date, timedelta
 
 import numpy as np
 
-SEC_UA = os.environ.get("SEC_USER_AGENT") or "StockTracker pattern scanner stocktracker-scanner@users.noreply.github.com"
+SEC_UA = os.environ.get("SEC_USER_AGENT") or "StockTracker-Scanner admin@example.com"
 M = 1_000_000.0
 REVENUE = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"]
 DIVIDENDS = ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"]

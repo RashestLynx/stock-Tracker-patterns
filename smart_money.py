@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta
 
-SEC_UA = os.environ.get("SEC_USER_AGENT") or "StockTracker pattern scanner stocktracker-scanner@users.noreply.github.com"
+SEC_UA = os.environ.get("SEC_USER_AGENT") or "StockTracker-Scanner admin@example.com"
 _last = [0.0]
 
 

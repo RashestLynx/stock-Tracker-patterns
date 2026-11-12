@@ -2,7 +2,7 @@ name: Nightly pattern scan
 
 on:
   schedule:
-    - cron: "17 7 * * 2-6"   # 1:17 am Chicago (winter), Tue–Sat: after each trading day's data is out
+    - cron: "17 11 * * 2-6"  # 5:17 am Chicago (winter), Tue–Sat: the free plan posts each day overnight
   workflow_dispatch:
   push:
     branches: [main]
@@ -45,7 +45,7 @@ jobs:
         env:
           MASSIVE_KEY: ${{ secrets.MASSIVE_KEY || secrets.MASSIVE_API }}
           BARGO_KEY: ${{ secrets.BARGO_KEY }}
-          SEC_USER_AGENT: "StockTracker pattern scanner stocktracker-scanner@users.noreply.github.com"
+          SEC_USER_AGENT: "StockTracker-Scanner admin@example.com"
         run: python scan.py
 
       # Saved even if the scan failed partway, so a long first download isn't lost.
