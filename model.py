@@ -373,9 +373,9 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None, eps_q
     pi = income_score(today["raw"]["yield"], pg + 0.5, pw + 0.5, u)
     pm = moat_score(today["X"], names, u)
     return {"tickers": tickers, "uni": u, "pg": pg + 0.5, "pw": pw + 0.5, "pi": pi, "pm": pm, "X": today["X"], "raw": today["raw"],
-            "spy_fwds": spy_fwds, "ics_by": ics_by,
+            "spy_fwds": spy_fwds, "ics_by": ics_by, "ics": ics, "C": C, "days": days,
             "w_g": dict(zip(names, w_g.round(4).tolist())), "w_w": dict(zip(names, w_w.round(4).tolist())),
-            "contrib_g": contrib_g, "contrib_w": today["X"] * w_w, "names": names, "oos": oos, "ics": ics, "tests": tests,
+            "contrib_g": contrib_g, "contrib_w": today["X"] * w_w, "names": names, "oos": oos, "tests": tests,
             "snaps": snaps, "C": C}
 
 
@@ -457,3 +457,53 @@ def star_record(rows):
     ex = ex[np.isfinite(ex)]
     return {"n": int(len(ex)), "ret": round(float(np.median(ex)), 4) if len(ex) else None,
             "beat": round(float((ex > 0).mean()), 3) if len(ex) else None}
+
+
+def stability(tests, ics):
+    """Accuracy year by year on the unseen months: a signal that only worked in one lucky stretch isn't solid."""
+    by = {}
+    for d, g, w in zip(tests, ics["g"], ics["w"]):
+        by.setdefault(d[:4], {"g": [], "w": []})
+        by[d[:4]]["g"].append(g)
+        by[d[:4]]["w"].append(w)
+    years = {y: {"g": round(float(np.mean(v["g"])), 3), "w": round(float(np.mean(v["w"])), 3), "months": len(v["g"])}
+             for y, v in sorted(by.items())}
+    g = np.array(ics["g"]) if ics["g"] else np.zeros(1)
+    w = np.array(ics["w"]) if ics["w"] else np.zeros(1)
+    # t-statistics on monthly accuracy (3-month outcomes overlap, so divide the count by 3 to be conservative)
+    n_eff = max(1, len(g) / 3)
+    return {"years": years,
+            "years_positive": {"g": sum(1 for v in years.values() if v["g"] > 0), "w": sum(1 for v in years.values() if v["w"] > 0),
+                               "of": len(years)},
+            "months_positive": {"g": round(float((g > 0).mean()), 3), "w": round(float((w > 0).mean()), 3)},
+            "t": {"g": round(float(g.mean() / (g.std() + 1e-9) * math.sqrt(n_eff)), 2),
+                  "w": round(float(w.mean() / (w.std() + 1e-9) * math.sqrt(n_eff)), 2)}}
+
+
+def live_record(cache_dir, today_iso, tickers, pg, pw, uni, C, days):
+    """The real test: today's grades are saved once a month, and graded 3 months later against what actually happened.
+    No hindsight is possible here, because the grades were saved before the outcome existed."""
+    import json, os
+    path = os.path.join(cache_dir, "live_grades.json")
+    book = json.load(open(path)) if os.path.exists(path) else {}
+    month = today_iso[:7]
+    if not any(k.startswith(month) for k in book):
+        book[today_iso] = {t: [round(float(pg[i]), 4), round(float(pw[i]), 4)] for i, t in enumerate(tickers) if uni[i]}
+    json.dump(book, open(path, "w"))
+    ix = {t: i for i, t in enumerate(tickers)}
+    dpos = {d.isoformat(): k for k, d in enumerate(days)}
+    results = []
+    for d0, grades_then in sorted(book.items()):
+        k0 = dpos.get(d0)
+        if k0 is None or k0 + HORIZON >= len(days):
+            continue
+        k1 = k0 + HORIZON
+        rows = [(v[0], v[1], C[ix[t], k1] / C[ix[t], k0] - 1, np.nanmin(C[ix[t], k0:k1 + 1]) / C[ix[t], k0] - 1)
+                for t, v in grades_then.items() if t in ix and np.isfinite(C[ix[t], k0]) and np.isfinite(C[ix[t], k1])]
+        if len(rows) < 100:
+            continue
+        a = np.array(rows)
+        def ic(x, y):
+            return float(np.corrcoef(x.argsort().argsort(), y.argsort().argsort())[0, 1])
+        results.append({"graded": d0, "n": len(rows), "ic_g": round(ic(a[:, 0], a[:, 2]), 3), "ic_w": round(ic(a[:, 1], a[:, 3]), 3)})
+    return {"saved": sorted(book), "checked": results}

@@ -692,6 +692,8 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                       "base": round(base, 3) if base is not None else None,
                       "ic": {k: round(float(np.mean(v)), 3) for k, v in L["ics"].items() if v},
                       "ic_by_model": {m: {k: round(float(np.mean(v)), 3) for k, v in d.items() if v} for m, d in L["ics_by"].items()},
+                      "stability": model.stability(L["tests"], L["ics"]),
+                      "live": model.live_record(cache_dir, today.isoformat(), L["tickers"], L["pg"], L["pw"], L["uni"], L["C"], L["days"]),
                       "weights": {"g": L["w_g"], "w": L["w_w"]},
                       "note": (f"Tested on {len(L['tests'])} monthly snapshots it never trained on "
                                f"({L['tests'][0]} to {L['tests'][-1]}), {n_cases:,} cases, each held 3 months. "
@@ -704,6 +706,12 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                 print(f"  {goal}: " + ", ".join(f"{b}: beat {v['beat']:.0%}, median {v['ret']:+.1%} vs S&P, drop {v['dd']:.0%} (n={v['n']})"
                                                for b, v in record[goal].items()))
             print(f"  next big thing: {record['stars']}")
+            st = record["stability"]
+            print(f"  stability: growth worked in {st['years_positive']['g']} of {st['years_positive']['of']} years "
+                  f"({st['months_positive']['g']:.0%} of months, t={st['t']['g']}); wealth {st['years_positive']['w']} of "
+                  f"{st['years_positive']['of']} years ({st['months_positive']['w']:.0%} of months, t={st['t']['w']}); "
+                  f"by year {json.dumps(st['years'])}")
+            print(f"  live record: {len(record['live']['saved'])} monthly snapshots saved, {len(record['live']['checked'])} checked so far")
             return {"date": today.isoformat(), "fy": fy, "graded": len(grades), "grades": grades,
                     "stars": star_list, "record": record}
         except Exception as e:

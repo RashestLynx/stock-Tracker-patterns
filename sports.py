@@ -384,6 +384,14 @@ def learn_league(key, games):
     rec = score_games(games, preds_full, idx, draws, d_prior / 0.95)
     pairs = [(preds_full[i], 1.0 if games[i][3] > games[i][4] else 0.0) for i in idx if games[i][3] != games[i][4]]
     rec["calibration"] = calibration(pairs)
+    # season by season: solid ratings should hold up in every test season, not just on average
+    rec["by_season"] = []
+    for sn in tests:
+        ix = [i for i in idx if seasons[i] == sn]
+        r = score_games(games, preds_full, ix, draws, d_prior / 0.95)
+        if r["n"]:
+            rec["by_season"].append({"from": games[ix[0]][0], "to": games[ix[-1]][0], "n": r["n"], "acc": r["acc"],
+                                     "brier": r["brier"], "base": round(sum(1 for i in ix if games[i][3] > games[i][4]) / len(ix), 3)})
     # the sportsbooks on the very same games, where odds exist
     with_book = [i for i in idx if len(games[i]) > 8 and games[i][8] is not None]
     if with_book:
@@ -574,7 +582,8 @@ def main():
             b = rec.get("books")
             print(f"{name}: {len(games)} games; tested on {rec['tested_seasons']} seasons ({rec['n']} games): favorite won "
                   f"{(rec['acc'] or 0):.1%}, Brier {rec['brier']}" + (f" | books on same games {b['acc']:.1%}, Brier {b['brier']}; "
-                  f"model {rec['model_same_games']['acc']:.1%}" if b else "") + f" | {time.time() - t0:.0f}s", flush=True)
+                  f"model {rec['model_same_games']['acc']:.1%}" if b else "") + f" | {time.time() - t0:.0f}s"
+                  + " | by season: " + ", ".join(f"{x['from'][:4]}: {x['acc']:.1%}" for x in rec["by_season"]), flush=True)
         except Exception as e:
             import traceback
             traceback.print_exc()
