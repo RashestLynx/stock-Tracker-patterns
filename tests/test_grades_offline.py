@@ -41,7 +41,8 @@ def fake_frame(self, tag, period):
                  "WeightedAverageNumberOfDilutedSharesOutstanding": 1e8, "OperatingIncomeLoss": ni * 1.3,
                  "GrossProfit": rev * 0.5, "NetCashProvidedByUsedInOperatingActivities": ni * 1.2,
                  "PaymentsToAcquirePropertyPlantAndEquipment": ni * 0.2,
-                 "PaymentsOfDividendsCommonStock": (ni * 0.4 if payer[t] and ni > 0 else None)}.get(tag)
+                 "PaymentsOfDividendsCommonStock": (0.0 if t == companies[1][1] and yr < FY else
+                                                     ni * 0.4 if (payer[t] or t == companies[1][1]) and ni > 0 else None)}.get(tag)
         else:
             v = {"Assets": 3e9, "StockholdersEquity": 1.5e9}.get(tag)
         if v is not None:

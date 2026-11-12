@@ -74,7 +74,7 @@ def parse_form4(text):
 
 def insider_day(day, cache_dir):
     """All open-market insider purchases filed on `day` (cached)."""
-    path = os.path.join(cache_dir, f"form4-{day.isoformat()}.json")
+    path = os.path.join(cache_dir, f"form4v2-{day.isoformat()}.json")
     if os.path.exists(path):
         return json.load(open(path))
     q = (day.month - 1) // 3 + 1
@@ -97,7 +97,9 @@ def insider_day(day, cache_dir):
             text = _sec("https://www.sec.gov/Archives/" + rel)
             if text:
                 buys += parse_form4(text)
-    if day < date.today():  # don't cache today's partial index
+    if idx is None and day.weekday() < 5 and (date.today() - day).days < 5:
+        return buys   # index not posted yet (or the SEC refused): try again next time
+    if idx is not None and day < date.today():  # don't cache today's partial index, or a failed download
         json.dump(buys, open(path, "w"))
     return buys
 
@@ -157,7 +159,6 @@ def congress_signals(days=45):
         if not ticker or ticker in ("--", "N/A") or "purchase" not in kind or when < cutoff:
             continue
         note = f"{t.get('member', 'A member')} disclosed a purchase ({t.get('amount_range') or 'amount not given'}) on {when}"
-        out.setdefault(ticker, [])
-        if len(out[ticker]) < 3:
-            out[ticker].append(("congress_buy", note))
-    return out
+        out.setdefault(ticker, []).append(note)
+    # One signal per stock, listing up to three buyers.
+    return {k: [("congress_buy", "; ".join(v[:3]) + (f"; and {len(v) - 3} more" if len(v) > 3 else ""))] for k, v in out.items()}

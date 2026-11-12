@@ -269,7 +269,7 @@ def fundamentals(sec, companies, fy, balance_periods):
                     break
             f["div_streak"] = float(streak)
             earlier = [div[yr] for yr in range(y - 4, y) if yr in div]
-            if earlier:
+            if earlier and sum(earlier) > 0:
                 f["div_vs_avg"] = d / (sum(earlier) / len(earlier))
             if f.get("fcf") and f["fcf"] > 0:
                 f["fcf_payout"] = d / f["fcf"]
