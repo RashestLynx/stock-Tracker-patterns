@@ -1,0 +1,46 @@
+name: Nightly sports ratings
+
+on:
+  schedule:
+    - cron: "23 10 * * *"   # 4:23 am Chicago (winter), after the night's games
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["sports.py", "tests/test_sports_offline.py", ".github/workflows/sports.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sports
+  cancel-in-progress: false
+
+jobs:
+  sports:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests
+        run: python tests/test_sports_offline.py
+      - name: Restore cache
+        uses: actions/cache/restore@v4
+        with:
+          path: cache/sports
+          key: sports-${{ github.run_id }}
+          restore-keys: sports-
+      - name: Ratings for every league
+        run: python sports.py
+      - name: Save cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cache/sports
+          key: sports-${{ github.run_id }}
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload latest out/sports.json.gz --clobber
