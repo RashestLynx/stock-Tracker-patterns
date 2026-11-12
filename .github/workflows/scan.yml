@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["*.py", ".github/workflows/scan.yml"]
+    paths: ["scan.py", "patterns.py", "smart_money.py", "grades.py", "model.py", "history.py", ".github/workflows/scan.yml"]
 
 permissions:
   contents: write

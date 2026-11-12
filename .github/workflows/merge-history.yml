@@ -1,0 +1,41 @@
+name: Merge downloaded history
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run id of a 'Download 10-year history' run whose slice files should be added to the cache"
+        required: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore cache
+        uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: prices-${{ github.run_id }}
+          restore-keys: prices-
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hist-*
+          path: cache/hist
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Count
+        run: echo "::notice title=History::$(ls cache/hist | wc -l) stocks downloaded"
+      - name: Save cache
+        uses: actions/cache/save@v4
+        with:
+          path: cache
+          key: prices-${{ github.run_id }}
+      - name: Retrain the grades
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run scan.yml -R ${{ github.repository }} --ref main
