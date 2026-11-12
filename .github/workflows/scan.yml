@@ -42,7 +42,7 @@ jobs:
 
       - name: Scan every stock
         env:
-          MASSIVE_KEY: ${{ secrets.MASSIVE_KEY }}
+          MASSIVE_KEY: ${{ secrets.MASSIVE_KEY || secrets.MASSIVE_API }}
           BARGO_KEY: ${{ secrets.BARGO_KEY }}
           SEC_USER_AGENT: "StockTracker pattern scanner stocktracker-scanner@users.noreply.github.com"
         run: python scan.py
