@@ -1,0 +1,10 @@
+name: Probe analyst data
+on:
+  push:
+    paths: ["probe/**", ".github/workflows/probe.yml"]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python probe/analysts.py
