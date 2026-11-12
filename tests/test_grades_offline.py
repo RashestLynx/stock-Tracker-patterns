@@ -54,7 +54,7 @@ grades.Sec.frame = fake_frame
 grades.Sec.companies = lambda self: companies
 grades.Sec.industries = lambda self, ciks: {c: (7372, "Software") for c in ciks}
 
-g = grades.run(tempfile.mkdtemp(), days, series, insiders={companies[0][1]: 1})
+g = grades.run(tempfile.mkdtemp(), days, series, insiders={companies[0][1]: 1}, data=data)
 print("graded", g["graded"], "stars", len(g["stars"]))
 assert g["graded"] > 100, g["graded"]
 gr = g["grades"]

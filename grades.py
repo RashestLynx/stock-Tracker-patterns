@@ -26,6 +26,8 @@ from datetime import date, timedelta
 
 import numpy as np
 
+import model
+
 SEC_UA = os.environ.get("SEC_USER_AGENT") or "StockTracker-Scanner admin@example.com"
 M = 1_000_000.0
 REVENUE = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"]
@@ -237,6 +239,7 @@ def fundamentals(sec, companies, fy, balance_periods):
                 f["gross_prof"] = gp / a
             if e is not None:
                 f["equity_ratio"] = e / a
+                f["equity"] = e
                 if e / a >= 0.05:
                     f["roe"] = n0 / e
                 liab = a - e
@@ -494,7 +497,66 @@ def star_reasons(r):
 
 
 # ------------------------------------------------------------ main entry
-def run(cache_dir, days, series, insiders=None):
+def model_reasons(L, i, goal):
+    """The measures that pushed this stock's learned score up or down the most."""
+    c = (L["contrib_g"] if goal == "g" else L["contrib_w"])[i]
+    names = L["names"]
+    order = np.argsort(-c)
+    up = [model.FEATURES[names[k]] for k in order[:2] if c[k] > 0.002]
+    down = [model.FEATURES[names[k]] for k in order[::-1][:1] if c[k] < -0.002]
+    out = []
+    if up:
+        out.append("Helped by " + " and ".join(up))
+    if down:
+        out.append("Held back by " + down[0])
+    return out
+
+
+def apply_model(L, grades, rows, companies, sics_get):
+    """Replaces the hand-weighted growth, wealth and income grades with the learned, tested ones."""
+    ix = {t: i for i, t in enumerate(L["tickers"])}
+    oos = L["oos"]
+    cal = {"g": model.calibration(oos, 0), "w": model.calibration(oos, 1), "i": model.calibration(oos, 2)}
+    def letter(p):
+        return next(l for cut, l in LETTERS if p * 100 >= cut)
+    for t, e in grades.items():
+        i = ix.get(t)
+        if i is None or not L["uni"][i]:
+            continue
+        for goal, key in (("g", "pg"), ("w", "pw"), ("i", "pi")):
+            p = float(L[key][i])
+            if not np.isfinite(p):
+                continue
+            g = letter(p)
+            cap = None
+            r = rows.get(t, {})
+            if goal == "i":   # keep the safety rules for risky dividends
+                y = r.get("yield") or 0
+                if y < 0.01:
+                    cap = "D"
+                elif r.get("yield", 0) > 0.10 or (r.get("fcf_payout") or 0) > 1.0 or (r.get("div_vs_avg") or 1) < 0.9 \
+                        or r.get("div_years", 0) < 5 or r.get("ni_now", 1) <= 0:
+                    cap = "C-"
+                elif y < 0.02:
+                    cap = "B-"
+            order = [x[1] for x in LETTERS]
+            if cap and order.index(g) < order.index(cap):
+                g = cap
+            e[goal], e[goal + "p"] = g, round(p * 100)
+            tenth = cal[goal][1][min(9, int(p * 10))]
+            if tenth["beat"] is not None and tenth["n"] >= 100:
+                e[goal + "b"] = tenth["beat"]          # measured chance to beat the S&P 500 over 3 months
+                e[goal + "d"] = tenth["dd"]            # typical worst drop over 3 months
+            if goal in ("g", "w"):
+                e["why"][goal] = model_reasons(L, i, goal) + e["why"][goal][:3]
+    # Next big thing from the learned growth score
+    pick = model.star_pick(L["raw"], L["pg"], L["uni"], top=120)
+    cands = [L["tickers"][i] for i in np.where(pick)[0]]
+    cands.sort(key=lambda t: -L["pg"][ix[t]])
+    return cal, cands
+
+
+def run(cache_dir, days, series, insiders=None, data=None):
     """days: [date]; series: {ticker: (o, h, l, c, v, idx)} from scan.py. Returns the grades file contents."""
     sec = Sec(cache_dir)
     companies = sec.companies()
@@ -554,6 +616,44 @@ def run(cache_dir, days, series, insiders=None):
         r = rows[t]
         star_list.append({"t": t, "name": r["name"], "cap": round(r["cap"] / M), "industry": sics.get(r["cik"], (0, ""))[1],
                           "why": star_reasons(r), "g": grades[t].get("g", "")})
+
+    # ---- learned model: fit to history and tested on months it never saw ----
+    if data is not None:
+        try:
+            need = {model.fy_for(d) for d in days[model.LOOKBACK:]}
+            print(f"Grades: learning from history (fiscal years {sorted(need)})")
+            fund_by_fy = {y: (fund if y == fy else fundamentals(sec, companies, y, [f"CY{y}Q4I"])) for y in need}
+            L = model.learn(days, data, companies, fund_by_fy)
+            cal, cands = apply_model(L, grades, rows, companies, None)
+            sics2 = sec.industries([rows[t]["cik"] for t in cands if t in rows])
+            picks = [t for t in cands if t in rows and not 6000 <= sics2.get(rows[t]["cik"], (0, ""))[0] <= 6799][:30]
+            star_list = [{"t": t, "name": rows[t]["name"], "cap": round(rows[t]["cap"] / M),
+                          "industry": sics2.get(rows[t]["cik"], (0, ""))[1], "why": star_reasons(rows[t]),
+                          "g": grades[t].get("g", "")} for t in picks]
+            n_cases = len(L["oos"])
+            base = float(np.mean([r[4] > 0 for r in L["oos"] if np.isfinite(r[4])])) if L["oos"] else None
+            record = {"g": cal["g"][0], "w": cal["w"][0], "i": cal["i"][0], "stars": model.star_record(L["oos"]),
+                      "spy": round(float(np.mean(L["spy_fwds"])), 4) if L["spy_fwds"] else None,
+                      "from": L["tests"][0] if L["tests"] else "", "to": L["tests"][-1] if L["tests"] else "",
+                      "months": 3, "method": "model", "cases": n_cases, "snapshots": len(L["tests"]),
+                      "base": round(base, 3) if base is not None else None,
+                      "ic": {k: round(float(np.mean(v)), 3) for k, v in L["ics"].items() if v},
+                      "weights": {"g": L["w_g"], "w": L["w_w"]},
+                      "note": (f"Tested on {len(L['tests'])} monthly snapshots it never trained on "
+                               f"({L['tests'][0]} to {L['tests'][-1]}), {n_cases:,} cases, each held 3 months. "
+                               f"An average stock beat the S&P 500 {base:.0%} of the time." if L["tests"] else "")}
+            print(f"Grades: learned model tested on {len(L['tests'])} snapshots, {n_cases} cases; "
+                  f"rank correlation growth {record['ic'].get('g')}, wealth {record['ic'].get('w')}")
+            for goal in ("g", "w", "i"):
+                print(f"  {goal}: " + ", ".join(f"{b}: beat {v['beat']:.0%}, median {v['ret']:+.1%} vs S&P, drop {v['dd']:.0%} (n={v['n']})"
+                                               for b, v in record[goal].items()))
+            print(f"  next big thing: {record['stars']}")
+            return {"date": today.isoformat(), "fy": fy, "graded": len(grades), "grades": grades,
+                    "stars": star_list, "record": record}
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"::warning title=Learned grades failed, using the rule-based ones::{e}")
 
     # ---- track record: the same rules as of a year ago, and what happened next ----
     record = {}
