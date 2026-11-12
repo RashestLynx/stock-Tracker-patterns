@@ -484,7 +484,18 @@ def reasons(r):
         w.append(f"Earns {r['roe'] * 100:.0f}% on shareholders' money")
     if r.get("profitable_years") is not None:
         w.append(f"Profitable {r['profitable_years']} of the last 6 years")
-    return {"g": g[:4], "i": i[:4], "w": w[:4]}
+    m = []
+    if r.get("gross_prof") is not None:
+        m.append(f"Gross profit is {r['gross_prof'] * 100:.0f}% of its assets each year")
+    if r.get("roe") is not None:
+        m.append(f"Earns {r['roe'] * 100:.0f}% on shareholders' money")
+    if r.get("fcf_conv") is not None:
+        m.append(f"Turned {r['fcf_conv'] * 100:.0f}% of 3 years' profit into cash")
+    if r.get("equity_ratio") is not None:
+        m.append(f"Shareholders own {r['equity_ratio'] * 100:.0f}% of its assets (the rest is debt and other bills)")
+    if r.get("consistency") is not None:
+        m.append(f"Sales and profit rose in {r['consistency'] * 100:.0f}% of the last 5 years")
+    return {"g": g[:4], "i": i[:4], "w": w[:4], "m": m[:5]}
 
 
 def star_reasons(r):
@@ -526,13 +537,14 @@ def apply_model(L, grades, rows, companies, sics_get):
     oos = L["oos"]
     cal = {"g": model.calibration(oos, 0), "w": model.calibration(oos, 1), "i": model.calibration(oos, 2)}
     line = {"g": model.smooth_odds(oos, 0), "w": model.smooth_odds(oos, 1), "i": model.smooth_odds(oos, 2)}
+    cal["m"], line["m"] = model.calibration(oos, 3), model.smooth_odds(oos, 3)
     def letter(p):
         return next(l for cut, l in LETTERS if p * 100 >= cut)
     for t, e in grades.items():
         i = ix.get(t)
         if i is None or not L["uni"][i]:
             continue
-        for goal, key in (("g", "pg"), ("w", "pw"), ("i", "pi")):
+        for goal, key in (("g", "pg"), ("w", "pw"), ("i", "pi"), ("m", "pm")):
             p = float(L[key][i])
             if not np.isfinite(p):
                 continue
@@ -656,7 +668,7 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
                           "g": grades[t].get("g", "")} for t in picks]
             n_cases = len(L["oos"])
             base = float(np.mean([r[4] > 0 for r in L["oos"] if np.isfinite(r[4])])) if L["oos"] else None
-            record = {"g": cal["g"][0], "w": cal["w"][0], "i": cal["i"][0], "stars": model.star_record(L["oos"]),
+            record = {"g": cal["g"][0], "w": cal["w"][0], "i": cal["i"][0], "m": cal["m"][0], "stars": model.star_record(L["oos"]),
                       "spy": round(float(np.mean(L["spy_fwds"])), 4) if L["spy_fwds"] else None,
                       "from": L["tests"][0] if L["tests"] else "", "to": L["tests"][-1] if L["tests"] else "",
                       "months": 3, "method": "model", "cases": n_cases, "snapshots": len(L["tests"]),
@@ -670,7 +682,7 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
             print(f"Grades: learned model tested on {len(L['tests'])} snapshots, {n_cases} cases; "
                   f"rank correlation growth {record['ic'].get('g')}, wealth {record['ic'].get('w')} "
                   f"(straight-line model {record['ic_by_model']['ridge']}, trees {record['ic_by_model']['trees']})")
-            for goal in ("g", "w", "i"):
+            for goal in ("g", "w", "i", "m"):
                 print(f"  {goal}: " + ", ".join(f"{b}: beat {v['beat']:.0%}, median {v['ret']:+.1%} vs S&P, drop {v['dd']:.0%} (n={v['n']})"
                                                for b, v in record[goal].items()))
             print(f"  next big thing: {record['stars']}")

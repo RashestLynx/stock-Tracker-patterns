@@ -165,6 +165,23 @@ def fy_for(d):
     return d.year - 1 if (d.month, d.day) >= (4, 15) else d.year - 2
 
 
+MOAT = ["gross_prof", "roe", "fcf_conv", "equity_ratio", "consistency"]   # a durable business, in the filings
+
+
+def moat_score(X, names, uni):
+    """Our own moat score: the average rank of high gross profit vs assets, high return on equity, profits backed by
+    cash, low debt and a steady growth record. A fixed formula (nothing fit), so testing it can't overfit.
+    0-1 among stocks with filings; nan for those without."""
+    cols = [names.index(m) for m in MOAT]
+    sub = X[:, cols]
+    known = (sub != 0).sum(axis=1) >= 3   # a rank of exactly 0 means 'missing'
+    out = np.full(len(X), np.nan)
+    m = uni & known
+    if m.sum() > 1:
+        out[m] = ranks(np.where(m, sub.mean(axis=1), np.nan), m)[m] + 0.5
+    return out
+
+
 def gbm_fit(train, target):
     """Gradient-boosted trees on the same ranked measures (catches interactions a straight line can't).
     Returns a predict function, or None if LightGBM isn't installed."""
@@ -277,10 +294,11 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
             ics[goal].append(ic(pr[goal][u], s[target][u]))
         inc = income_score(s["raw"]["yield"], pr["g"], pr["w"], u)
         star = star_pick(s["raw"], pr["g"], u)
+        moat = moat_score(s["X"], names, u)
         for i in np.where(u)[0]:
             y = s["raw"]["yield"][i]
             oos.append((pr["g"][i], pr["w"][i], inc[i], float(star[i]), s["fwd"][i] - s["spy_fwd"], s["dd"][i],
-                        (s["fwd"][i] + (y if np.isfinite(y) else 0) * HORIZON / 252) - s["spy_fwd"]))
+                        (s["fwd"][i] + (y if np.isfinite(y) else 0) * HORIZON / 252) - s["spy_fwd"], moat[i]))
 
     # ---- final fit on everything known, grade today ----
     known = [s for s in snaps if "fwd" in s]
@@ -301,7 +319,8 @@ def learn(days, data, companies, fund_by_fy, spy_ticker="SPY", panel=None):
                 pw = ranks(pw + r, u)
     contrib_g = today["X"] * w_g
     pi = income_score(today["raw"]["yield"], pg + 0.5, pw + 0.5, u)
-    return {"tickers": tickers, "uni": u, "pg": pg + 0.5, "pw": pw + 0.5, "pi": pi, "X": today["X"], "raw": today["raw"],
+    pm = moat_score(today["X"], names, u)
+    return {"tickers": tickers, "uni": u, "pg": pg + 0.5, "pw": pw + 0.5, "pi": pi, "pm": pm, "X": today["X"], "raw": today["raw"],
             "spy_fwds": spy_fwds, "ics_by": ics_by,
             "w_g": dict(zip(names, w_g.round(4).tolist())), "w_w": dict(zip(names, w_w.round(4).tolist())),
             "contrib_g": contrib_g, "contrib_w": today["X"] * w_w, "names": names, "oos": oos, "ics": ics, "tests": tests,
@@ -339,7 +358,8 @@ def bucket(p):
 
 def calibration(rows, col, outcome="ex"):
     """Out-of-sample results by letter, and by tenth (each stock's probability). col: 0 growth, 1 wealth, 2 income."""
-    arr = np.array(rows, float) if rows else np.zeros((0, 7))
+    arr = np.array(rows, float) if rows else np.zeros((0, 8))
+    col = 7 if col == 3 else col
     p = arr[:, col]
     ex = arr[:, 6] if col == 2 else arr[:, 4]
     dd = arr[:, 5]
@@ -363,7 +383,8 @@ def calibration(rows, col, outcome="ex"):
 def smooth_odds(rows, col):
     """Chance to beat the S&P 500 and typical worst drop as a straight-line function of the score, fit on the
     out-of-sample cases, so a better score never shows worse odds. Returns (a, b, c, d): beat = a + b*(p-0.5), drop = c + d*(p-0.5)."""
-    arr = np.array(rows, float) if rows else np.zeros((0, 7))
+    arr = np.array(rows, float) if rows else np.zeros((0, 8))
+    col = 7 if col == 3 else col
     p = arr[:, col] - 0.5
     ex = arr[:, 6] if col == 2 else arr[:, 4]
     dd = arr[:, 5]
@@ -378,7 +399,7 @@ def smooth_odds(rows, col):
 
 
 def star_record(rows):
-    arr = np.array(rows, float) if rows else np.zeros((0, 7))
+    arr = np.array(rows, float) if rows else np.zeros((0, 8))
     m = arr[:, 3] > 0
     ex = arr[m, 4]
     ex = ex[np.isfinite(ex)]
