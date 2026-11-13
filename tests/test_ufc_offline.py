@@ -60,6 +60,8 @@ def test_about():
     assert ufc.about("Dan Hooker Shows Off Nasty Injury Ahead of UFC Qatar", "Dan Hooker", F["injury"])
     assert ufc.about("Injury forces Dan Hooker out of UFC Qatar", "Dan Hooker", F["injury"], "Mateusz Gamrot")
     assert not ufc.about("Gamrot vs Hooker off after injury", "Mateusz Gamrot", F["injury"], "Dan Hooker")
+    assert not ufc.about('Bilal Hasan cites a "curse" that MMA legend Alexander Volkanovski broke at UFC 3', "Bilal Hasan", F["injury"])
+    assert ufc.about("Caio Borralho Says He Fought De Ridder With a Broken Rib", "Caio Borralho", F["injury"], "Someone Else")
     print("about ok")
 
 

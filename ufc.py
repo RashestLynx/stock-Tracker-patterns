@@ -85,7 +85,7 @@ VARIANTS = {
 }
 
 FLAGS = {
-    "injury": r"injur|hurt|surgery|torn|broke|fracture|concussion|hospital",
+    "injury": r"injur|hurt|surgery|torn|broken (rib|hand|foot|arm|leg|nose|jaw|orbital|toe|finger)|broke (his|her)|fracture|concussion|hospital",
     "illness": r"\bill\b|illness|sick|flu\b|staph|infection|covid",
     "pulled out": r"pull(ed|s)? out|withdr[ae]w|out of (the )?fight|replac(ed|ement)|short[- ]notice|scrapped|cancel",
     "weight": r"miss(ed|es)? weight|weight[- ]cut|off weight|over the (weight )?limit|catchweight|failed to make weight|dehydrat|"
