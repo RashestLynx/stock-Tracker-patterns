@@ -365,9 +365,15 @@ def about(title, name, kind_pat, opponent=""):
     return not (opp and opp in t) and len(t[m.end():pos[0]].split()) <= 3
 
 
+_DEAD = set()   # news sources that refused us this run: skip them instead of waiting on retries
+
+
 def _rss(url, name, opponent, source, cutoff):
-    raw = sports.get(url, raw=True)
+    if source in _DEAD:
+        return []
+    raw = sports.get(url, raw=True, tries=1)
     if not raw:
+        _DEAD.add(source) if source != "news" else None
         return []
     text = raw.decode("utf-8", "replace")
     out = []
