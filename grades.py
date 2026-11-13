@@ -723,8 +723,20 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
             print(f"  growth fitting choices (accuracy on unseen months): {L['variants']}; using now: {L['variant']}; "
                   f"used over time: {dict(Counter(L['variant_log']))}")
             print(f"  live record: {len(record['live']['saved'])} monthly snapshots saved, {len(record['live']['checked'])} checked so far")
-            return {"date": today.isoformat(), "fy": fy, "graded": len(grades), "grades": grades,
-                    "stars": star_list, "record": record}
+            cc = None
+            if panel is not None:
+                try:
+                    import covered
+                    cc = covered.run(panel[1], panel[2])
+                    if cc:
+                        print(f"Covered calls (history test): {json.dumps(cc['summary'])}")
+                except Exception as e:
+                    print(f"::warning title=Covered-call history test failed::{e}")
+            out = {"date": today.isoformat(), "fy": fy, "graded": len(grades), "grades": grades,
+                   "stars": star_list, "record": record}
+            if cc:
+                out["covered"] = cc
+            return out
         except Exception as e:
             import traceback
             traceback.print_exc()

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["scan.py", "patterns.py", "smart_money.py", "grades.py", "model.py", "history.py", ".github/workflows/scan.yml"]
+    paths: ["scan.py", "patterns.py", "smart_money.py", "grades.py", "model.py", "history.py", "covered.py", ".github/workflows/scan.yml"]
 
 permissions:
   contents: write
@@ -33,6 +33,7 @@ jobs:
           python tests/test_grades_offline.py
           python tests/test_model_noleak.py
           python tests/test_history_offline.py
+          python tests/test_covered_offline.py
 
       # Two years of daily prices are kept between runs, so each night only downloads the newest day.
       # The first run downloads everything (about 100 minutes on Massive's free plan).
