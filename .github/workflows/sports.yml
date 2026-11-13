@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["sports.py", "matchup.py", "tests/test_*offline.py", ".github/workflows/sports.yml"]
+    paths: ["sports.py", "matchup.py", "ufc.py", "tests/test_*offline.py", ".github/workflows/sports.yml"]
 
 permissions:
   contents: write
@@ -29,6 +29,7 @@ jobs:
           pip install numpy
           python tests/test_sports_offline.py
           python tests/test_matchup_offline.py
+          python tests/test_ufc_offline.py
       - name: Restore cache
         uses: actions/cache/restore@v4
         with:

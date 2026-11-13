@@ -230,6 +230,20 @@ def fd_games(key):
     return sorted(rows)
 
 
+UFC_INFO = {}   # (date, fighter 1, fighter 2) -> {"ids": [id1, id2], "class": weight class, "method": "KO"/"SUB"/"DEC"/""}
+
+
+def _method(c):
+    texts = " ".join(((d.get("type") or {}).get("text") or "") for d in (c.get("details") or [])[:3]).lower()
+    if "ko" in texts or "knockout" in texts:
+        return "KO"
+    if "sub" in texts:
+        return "SUB"
+    if "decision" in texts:
+        return "DEC"
+    return ""
+
+
 def ufc_fights():
     rows = []
     today = date.today()
@@ -253,10 +267,12 @@ def ufc_fights():
                             continue
                         n1, n2 = ((x.get("athlete") or {}).get("displayName") for x in comp)
                         out.append([(c.get("date") or ev.get("date") or "")[:10], n1, n2, 1.0 if comp[0].get("winner") else 0.0,
-                                    0.0 if comp[0].get("winner") else 1.0])
+                                    0.0 if comp[0].get("winner") else 1.0, comp[0].get("id"), comp[1].get("id"),
+                                    (c.get("type") or {}).get("abbreviation") or "", _method(c)])
                 return out
-            for r in cached(f"ufc/{a:%Y%m%d}.json.gz", fetch, keep_days=0.5 if current else None) or []:
+            for r in cached(f"ufc2/{a:%Y%m%d}.json.gz", fetch, keep_days=0.5 if current else None) or []:
                 rows.append((r[0], r[1], r[2], r[3], r[4], True, r[1], r[2], None))
+                UFC_INFO[(r[0], r[1], r[2])] = {"ids": [r[5], r[6]], "class": r[7], "method": r[8]}
     return sorted(rows)
 
 
@@ -553,6 +569,23 @@ def main():
                 teams[t]["trend"] = tr.get(t, 0)
             inj = injuries(path) if key in ("nfl", "nba", "nhl", "mlb") else {}
             up = []
+            if key == "ufc":
+                try:
+                    import ufc
+                    urec, up = ufc.run(games, H)
+                    rec["matchup"] = urec
+                    out["leagues"][key] = {"name": name, "record": rec, "teams": teams, "injuries": {}, "upcoming": up,
+                                           "home_edge": 0, "draw_rate": None, "games": len(games)}
+                    t = urec["tested"]
+                    print(f"  UFC fight-factor layer: " + ", ".join(f"{v} logloss {r['logloss']} acc {r['acc']:.1%}" for v, r in t.items())
+                          + f" -> using {urec['used']}; {len(up)} upcoming fights", flush=True)
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    print(f"::warning title=UFC fight factors failed::{e}")
+                    out["leagues"][key] = {"name": name, "record": rec, "teams": teams, "injuries": {}, "upcoming": [],
+                                           "home_edge": 0, "draw_rate": None, "games": len(games)}
+                continue
             try:
                 import matchup
                 margins = [abs(g[3] - g[4]) for g in games if g[3] != g[4]]
