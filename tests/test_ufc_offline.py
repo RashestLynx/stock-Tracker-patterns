@@ -77,6 +77,7 @@ def test_card_and_travel():
     assert nxt["D"]["booked_days"] == 12                                # booked 12 days before the fight
     assert ufc.time_zones("America/New_York", "Asia/Dubai", "2026-11-14") == 9.0
     assert ufc.time_zones("Australia/Sydney", "America/Los_Angeles", "2026-11-14") == 5.0
+    assert ufc.time_zones(None, "Asia/Dubai", "2026-11-14", -47.9, 55.3) == 6.9   # Brazil to Abu Dhabi by longitude
     print("card and travel ok")
 
 

@@ -196,8 +196,13 @@ def utc_offset(tz, d):
         return None
 
 
-def time_zones(home_tz, event_tz, d):
+def time_zones(home_tz, event_tz, d, home_lon=None, event_lon=None):
+    """Hours of time difference between home and the fight. Uses time-zone names when both are known,
+    else longitude (15 degrees = 1 hour), since the geocoder often has no time zone for a whole country."""
     a, b = utc_offset(home_tz, d) if home_tz else None, utc_offset(event_tz, d) if event_tz else None
+    if (a is None or b is None) and home_lon is not None and event_lon is not None:
+        x = abs(home_lon - event_lon) / 15 % 24
+        return round(min(x, 24 - x), 1)
     if a is None or b is None:
         return 0.0
     x = abs(a - b) % 24
@@ -268,8 +273,9 @@ class Career:
         ev = ctx.get("place") or {}
         home_a = 1.0 if ev.get("cc") and ctx.get("cc_a") == ev.get("cc") else 0.0
         home_b = 1.0 if ev.get("cc") and ctx.get("cc_b") == ev.get("cc") else 0.0
-        trav = gap(time_zones(ctx.get("tz_a"), ev.get("tz"), d), time_zones(ctx.get("tz_b"), ev.get("tz"), d), 6) \
-            if ev.get("tz") and ctx.get("tz_a") and ctx.get("tz_b") else 0.0
+        trav = gap(time_zones(ctx.get("tz_a"), ev.get("tz"), d, ctx.get("lon_a"), ev.get("lon")),
+                   time_zones(ctx.get("tz_b"), ev.get("tz"), d, ctx.get("lon_b"), ev.get("lon")), 6) \
+            if ev and (ctx.get("tz_a") or ctx.get("lon_a") is not None) and (ctx.get("tz_b") or ctx.get("lon_b") is not None) else 0.0
         alt = min(3.0, (ev.get("elev") or 0) / 1000)
         five = 1.0 if ctx.get("rounds") == 5 else 0.0
         st_a, st_b = (pa.get("stance") or "").lower(), (pb.get("stance") or "").lower()
@@ -324,7 +330,8 @@ def context(info, pa, pb, heights):
         place(COUNTRY_ALIASES.get(pb.get("country"), pb.get("country"))) if pb.get("country") else None
     return {"rounds": info.get("rounds"), "place": venue_place(v), "apex": "apex" in (v.get("name") or "").lower(),
             "cc_a": (pa_home or {}).get("cc"), "cc_b": (pb_home or {}).get("cc"),
-            "tz_a": (pa_home or {}).get("tz"), "tz_b": (pb_home or {}).get("tz"), "class_height": heights}
+            "tz_a": (pa_home or {}).get("tz"), "tz_b": (pb_home or {}).get("tz"),
+            "lon_a": (pa_home or {}).get("lon"), "lon_b": (pb_home or {}).get("lon"), "class_height": heights}
 
 
 def build(games, preds, profiles, stats):
@@ -561,7 +568,8 @@ def run(games, home_edge):
             sty = car.style(n)
             S = car.side(n, prof, d, wc)
             home = bool(ev_place.get("cc") and ctx.get("cc_" + side) == ev_place.get("cc"))
-            tz = time_zones(ctx.get("tz_" + side), ev_place.get("tz"), d) if ev_place.get("tz") and ctx.get("tz_" + side) else None
+            tz = time_zones(ctx.get("tz_" + side), ev_place.get("tz"), d, ctx.get("lon_" + side), ev_place.get("lon")) \
+                if ev_place and (ctx.get("tz_" + side) or ctx.get("lon_" + side) is not None) else None
             ch = changes.get(n) or {}
             row["fighters"][n] = {
                 "age": prof.get("age"), "reach": prof.get("reach"), "height": prof.get("height"), "stance": prof.get("stance"),
