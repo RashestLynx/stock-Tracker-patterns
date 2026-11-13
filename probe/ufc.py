@@ -16,7 +16,7 @@ if ev:
     x = c["competitors"][0]; print("competitor keys", sorted(x.keys())); print("athlete keys", sorted((x.get("athlete") or {}).keys()))
     print("athlete", {k: x["athlete"].get(k) for k in ("id", "displayName", "age", "height", "weight", "reach", "dateOfBirth")}, "records", x.get("records"))
     print("notes", c.get("notes"), "| details", str(c.get("details"))[:200])
-    aid = x["athlete"]["id"]
+    aid = x["id"]; print("details texts", [d["type"]["text"] for d in c["details"]][:6])
     a = get(f"https://site.web.api.espn.com/apis/common/v3/sports/mma/athletes/{aid}")
     print("athlete v3 keys", sorted((a.get("athlete") or {}).keys())[:40], str(a)[:300] if "ERR" in a else "")
     at = a.get("athlete", {}); print({k: at.get(k) for k in ("age", "displayHeight", "displayWeight", "displayReach", "weightClass", "stance", "dateOfBirth")})
