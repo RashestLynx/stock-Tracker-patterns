@@ -266,13 +266,21 @@ def ufc_fights():
                         if len(w) != 1:
                             continue
                         n1, n2 = ((x.get("athlete") or {}).get("displayName") for x in comp)
+                        st = c.get("status") or {}
+                        v = c.get("venue") or {}
+                        addr = v.get("address") or {}
                         out.append([(c.get("date") or ev.get("date") or "")[:10], n1, n2, 1.0 if comp[0].get("winner") else 0.0,
                                     0.0 if comp[0].get("winner") else 1.0, comp[0].get("id"), comp[1].get("id"),
-                                    (c.get("type") or {}).get("abbreviation") or "", _method(c)])
+                                    (c.get("type") or {}).get("abbreviation") or "", _method(c), c.get("id"),
+                                    {"name": v.get("fullName") or "", "city": addr.get("city") or "", "state": addr.get("state") or "",
+                                     "country": addr.get("country") or ""},
+                                    ((c.get("format") or {}).get("regulation") or {}).get("periods") or 3,
+                                    round(((st.get("period") or 3) - 1) * 5 + (st.get("clock") or 300) / 60, 2)])
                 return out
-            for r in cached(f"ufc2/{a:%Y%m%d}.json.gz", fetch, keep_days=0.5 if current else None) or []:
+            for r in cached(f"ufc3/{a:%Y%m%d}.json.gz", fetch, keep_days=0.5 if current else None) or []:
                 rows.append((r[0], r[1], r[2], r[3], r[4], True, r[1], r[2], None))
-                UFC_INFO[(r[0], r[1], r[2])] = {"ids": [r[5], r[6]], "class": r[7], "method": r[8]}
+                UFC_INFO[(r[0], r[1], r[2])] = {"ids": [r[5], r[6]], "class": r[7], "method": r[8], "cid": r[9],
+                                                "venue": r[10], "rounds": r[11], "minutes": r[12]}
     return sorted(rows)
 
 
