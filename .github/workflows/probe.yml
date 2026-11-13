@@ -1,0 +1,10 @@
+name: Probe dividends
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python tools/probe_div.py
+        env:
+          K: ${{ secrets.MASSIVE_KEY || secrets.MASSIVE_API }}
