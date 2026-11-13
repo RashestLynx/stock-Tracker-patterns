@@ -117,7 +117,7 @@ def run(tickers, C, min_years=3, V=None):
     a = np.array([rows[t] for t in keep])
     j = {c: k for k, c in enumerate(COLS)}
     summary = {
-        "stocks": len(rows),
+        "stocks": len(keep),
         "balanced_beat_hold": round(float(np.mean(a[:, j["balanced"]] > a[:, j["hold"]])), 3),
         "safer_beat_hold": round(float(np.mean(a[:, j["safer"]] > a[:, j["hold"]])), 3),
         "median_hold": round(float(np.median(a[:, j["hold"]])), 3),

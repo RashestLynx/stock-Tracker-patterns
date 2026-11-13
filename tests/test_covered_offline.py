@@ -22,7 +22,7 @@ rocket = path(0.45, 0.25, 200)   # strong grower: capping the upside should cost
 C = np.vstack([flat, rocket])
 C[5, :1500] = np.nan             # a stock with only a few years of history
 tick = [f"F{i}" for i in range(200)] + [f"R{i}" for i in range(200)]
-V = np.full_like(C, 1e6); V[:50] = 10.0                 # first 50 stocks barely trade
+V = np.full_like(C, 1e8); V[:50] = 10.0                 # first 50 stocks barely trade
 out = covered.run(tick, C, V=V)
 rows = out["rows"]
 fl = np.array([rows[t] for t in tick[:200] if t in rows]); ro = np.array([rows[t] for t in tick[200:]])
