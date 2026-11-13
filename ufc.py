@@ -110,7 +110,29 @@ def build(games, preds, profiles):
     return X, car
 
 
-def news_flags(name):
+def about(title, name, kind_pat, opponent=""):
+    """True if the flag in a headline is about this fighter, not someone else named in it.
+    The fighter must be named before the flag word with no other fighter in between
+    ("Harrison's weight cut ... before Nunes fight" flags Harrison, not Nunes), or right after it
+    when no opponent is named ("Injury forces Hooker out")."""
+    t = title.lower()
+    m = re.search(kind_pat, t, re.I)
+    if not m:
+        return False
+    last = name.split()[-1].lower()
+    pos = [x.start() for x in re.finditer(r"\b" + re.escape(last) + r"\b", t)]
+    if not pos:
+        return False
+    opp = opponent.split()[-1].lower() if opponent else ""
+    before = [p for p in pos if p < m.start()]
+    if before:
+        gap = t[before[-1] + len(last):m.start()]
+        # another fighter or "foe/opponent/vs" between the name and the flag means the flag is someone else's
+        return not ((opp and opp in gap) or re.search(r"\b(vs\.?|foe|opponent|rival|against)\b", gap))
+    return not (opp and opp in t) and len(t[m.end():pos[0]].split()) <= 3
+
+
+def news_flags(name, opponent=""):
     """Headlines from the last 3 weeks about injuries, pull-outs or weight trouble (Google News)."""
     q = f'"{name}" (injury OR injured OR "pulled out" OR withdraws OR "missed weight" OR "weight cut" OR hospital OR replacement)'
     raw = sports.get("https://news.google.com/rss/search?q=" + urllib.parse.quote(q) + "&hl=en-US&gl=US&ceid=US:en", raw=True)
@@ -130,7 +152,7 @@ def news_flags(name):
             continue
         if dt < cutoff or last not in title.lower():
             continue
-        kinds = [k for k, pat in FLAGS.items() if re.search(pat, title, re.I)]
+        kinds = [k for k, pat in FLAGS.items() if about(title, name, pat, opponent)]
         if kinds:
             out.append({"title": title[:200], "link": link, "date": dt.date().isoformat(), "kinds": kinds})
     return out[:5]
@@ -201,7 +223,7 @@ def run(games, home_edge):
                     "layoff_days": (date.fromisoformat(d) - date.fromisoformat(last[0])).days if last else None,
                     "last": (("Won" if last[1] else "Lost") + (f" by {last[2]}" if last[2] else "") + f" ({last[0]})") if last else "",
                     "class_change": (CLASSES.index(wc) - CLASSES.index(last[3])) if last and last[3] in CLASSES and wc in CLASSES else 0,
-                    "news": news_flags(n),
+                    "news": news_flags(n, b if n == a else a),
                 }
             up.append(row)
     return rec, up

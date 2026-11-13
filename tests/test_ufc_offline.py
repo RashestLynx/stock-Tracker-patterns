@@ -34,3 +34,19 @@ for label, eff, expect in (("real age effect", 30, True), ("no age effect", 0, F
     else:
         assert rec["tested"]["elo"]["logloss"] - rec["tested"]["fight factors"]["logloss"] < 0.004, rec
 print("ufc ok")
+
+
+def test_about():
+    F = ufc.FLAGS
+    assert ufc.about("Kayla Harrison's UFC 334 weight cut draws scrutiny before Amanda Nunes fight", "Kayla Harrison", F["weight"], "Amanda Nunes")
+    assert not ufc.about("Kayla Harrison's UFC 334 weight cut draws scrutiny before Amanda Nunes fight", "Amanda Nunes", F["weight"], "Kayla Harrison")
+    assert ufc.about("Maycee Barber Withdraws From UFC 335 Fight With Carli Judice", "Maycee Barber", F["pulled out"], "Carli Judice")
+    assert not ufc.about("Maycee Barber Withdraws From UFC 335 Fight With Carli Judice", "Carli Judice", F["pulled out"], "Maycee Barber")
+    assert not ufc.about("What injured Tom Aspinall really thinks of UFC foe Gane", "Ciryl Gane", F["injury"], "Someone Else")
+    assert ufc.about("Dan Hooker Shows Off Nasty Injury Ahead of UFC Qatar", "Dan Hooker", F["injury"])
+    assert ufc.about("Injury forces Dan Hooker out of UFC Qatar", "Dan Hooker", F["injury"], "Mateusz Gamrot")
+    assert not ufc.about("Gamrot vs Hooker off after injury", "Mateusz Gamrot", F["injury"], "Dan Hooker")
+    print("about ok")
+
+
+test_about()
