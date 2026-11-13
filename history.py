@@ -119,7 +119,7 @@ def load(cache_dir, t):
 
 def merged_panel(cache_dir, days, data, tickers):
     """Calendar of Nasdaq history (before Massive's first day) + Massive's days, and close/volume matrices.
-    Returns (dates, tickers, C, V) with NaN where a stock didn't trade."""
+    Returns (dates, C, V) with NaN where a stock didn't trade (rows in the order of `tickers`)."""
     spy = load(cache_dir, "SPY")
     first = days[0].isoformat()
     old = [d for d in spy.get("d", []) if d < first]

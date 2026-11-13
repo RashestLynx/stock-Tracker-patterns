@@ -28,7 +28,7 @@ import math
 import os
 import re
 import urllib.parse
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import sys
 
@@ -407,7 +407,7 @@ def _rss(url, name, opponent, source, cutoff):
 def news_flags(name, opponent=""):
     """Headlines from the last 3 weeks about injuries, illness, pull-outs, weight, visas, suspensions or camp changes.
     Google News covers MMA sites and the fighters' own posts once reported; Reddit's r/MMA is checked too."""
-    cutoff = datetime.utcnow() - timedelta(days=21)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=21)
     words = '(injury OR injured OR "pulled out" OR withdraws OR "missed weight" OR "weight cut" OR hospital OR replacement ' \
             'OR illness OR sick OR visa OR suspended OR USADA OR "parts ways")'
     out = _rss("https://news.google.com/rss/search?q=" + urllib.parse.quote(f'"{name}" {words}') + "&hl=en-US&gl=US&ceid=US:en",

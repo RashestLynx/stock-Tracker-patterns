@@ -27,7 +27,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 CACHE = os.path.join(os.environ.get("CACHE_DIR", "cache"), "sports")
 OUT = os.environ.get("OUT_DIR", "out")
@@ -524,7 +524,7 @@ def kalshi_calibration():
     the result. Kept and added to over time, so the picture of Kalshi's bias grows every day."""
     path = os.path.join(CACHE, "kalshi_pairs.json")
     pairs = json.load(open(path)) if os.path.exists(path) else {}
-    since = datetime.utcnow() - timedelta(hours=30)
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=30)
     for s in SERIES:
         cursor = ""
         for _ in range(10):
