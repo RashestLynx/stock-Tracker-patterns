@@ -4,9 +4,8 @@ How selling covered calls would have done on each stock over its price history, 
 Every 21 trading days (about a month) the test "sells" one call on 100 shares and holds it to expiry:
   - the strike is set so the call's delta is 0.15 ("safer": shares get called away less often) or
     0.25 ("balanced"), the levels the app suggests;
-  - the premium is the Black-Scholes price using the stock's own volatility over the past 60 trading days.
-    Real option prices usually carry a bit more volatility than that (traders pay for protection), but you
-    also sell at the bid, below the fair price, so the two roughly cancel. Treat the result as an estimate;
+  - the premium is the Black-Scholes price using the stock's own volatility over the past 60 trading days,
+    cut by 15% because you sell at the bid, below the fair price. Treat the result as an estimate;
   - at expiry the stock is worth min(price, strike) to you plus the premium kept. If the shares are called away,
     the test buys them back at the market price, so you stay invested (what most people do).
 Dividends are left out of both sides, so holding vs. covered calls is a fair comparison.
@@ -20,6 +19,8 @@ STEP = 21          # trading days per call
 LOOK = 60          # days of history for volatility
 RATE = 0.04        # interest rate for option pricing
 Z = {"safer": -1.0364, "balanced": -0.6745}   # d1 that gives delta 0.15 and 0.25
+HAIRCUT = 0.85     # you sell at the bid, below the fair price: keep only 85% of it
+LIQUID = 20e6      # summary counts only stocks trading $20M+ a day (ones with real option markets)
 COLS = ["years", "hold", "safer", "balanced", "called_safer", "called_balanced", "premium_balanced", "drop_hold", "drop_balanced"]
 
 _erf = np.frompyfunc(math.erf, 1, 1)
@@ -57,7 +58,7 @@ def simulate(C, years=10):
         for k, z in Z.items():
             # strike for this delta: ln(K/S) = (r + sigma^2/2) T - z sigma sqrt(T)
             K = Sx * np.exp((RATE + sig ** 2 / 2) * T - z * sig * math.sqrt(T))
-            p = call_price(Sx, K, sig, T)
+            p = call_price(Sx, K, sig, T) * HAIRCUT
             r = (np.minimum(S2x, K) + p) / Sx - 1
             rets[k].append(np.where(ok, r, np.nan))
             called[k].append(np.where(ok, (S2x > K).astype(float), np.nan))
@@ -86,8 +87,9 @@ def simulate(C, years=10):
     return out
 
 
-def run(tickers, C, min_years=3):
-    """Per-ticker results (rounded) plus a summary across stocks, for the app."""
+def run(tickers, C, min_years=3, V=None):
+    """Per-ticker results (rounded) plus a summary across stocks with real option markets, for the app.
+    V: shares traded per day, used to keep the summary to stocks trading $20M+ a day."""
     with np.errstate(all="ignore"), warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         sim = simulate(C)
@@ -103,7 +105,16 @@ def run(tickers, C, min_years=3):
         rows[t] = [round(float(v), 3 if c != "years" else 1) for c, v in zip(COLS, vals)]
     if not rows:
         return None
-    a = np.array(list(rows.values()))
+    liquid = None
+    if V is not None:
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            dollar = np.nanmedian(np.where(V[:, -252:] > 0, V[:, -252:] * C[:, -252:], np.nan), axis=1)
+        liquid = {t for i, t in enumerate(tickers) if np.isfinite(dollar[i]) and dollar[i] >= LIQUID}
+    keep = [t for t in rows if liquid is None or t in liquid]
+    if len(keep) < 50:
+        keep = list(rows)
+    a = np.array([rows[t] for t in keep])
     j = {c: k for k, c in enumerate(COLS)}
     summary = {
         "stocks": len(rows),

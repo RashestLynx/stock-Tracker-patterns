@@ -727,7 +727,7 @@ def run(cache_dir, days, series, insiders=None, data=None, hist_tickers=None):
             if panel is not None:
                 try:
                     import covered
-                    cc = covered.run(panel[1], panel[2])
+                    cc = covered.run(panel[1], panel[2], V=panel[3])
                     if cc:
                         print(f"Covered calls (history test): {json.dumps(cc['summary'])}")
                 except Exception as e:
