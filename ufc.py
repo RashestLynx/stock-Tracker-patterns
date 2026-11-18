@@ -273,9 +273,12 @@ class Career:
         ev = ctx.get("place") or {}
         home_a = 1.0 if ev.get("cc") and ctx.get("cc_a") == ev.get("cc") else 0.0
         home_b = 1.0 if ev.get("cc") and ctx.get("cc_b") == ev.get("cc") else 0.0
-        trav = gap(time_zones(ctx.get("tz_a"), ev.get("tz"), d, ctx.get("lon_a"), ev.get("lon")),
-                   time_zones(ctx.get("tz_b"), ev.get("tz"), d, ctx.get("lon_b"), ev.get("lon")), 6) \
-            if ev and (ctx.get("tz_a") or ctx.get("lon_a") is not None) and (ctx.get("tz_b") or ctx.get("lon_b") is not None) else 0.0
+        # home is only known as a country, so a fighter in their own country counts as no travel
+        # (the middle of the US is not where a New Yorker lives)
+        tz_a = 0.0 if home_a else time_zones(ctx.get("tz_a"), ev.get("tz"), d, ctx.get("lon_a"), ev.get("lon"))
+        tz_b = 0.0 if home_b else time_zones(ctx.get("tz_b"), ev.get("tz"), d, ctx.get("lon_b"), ev.get("lon"))
+        trav = gap(tz_a, tz_b, 6) \
+            if ev and (home_a or ctx.get("tz_a") or ctx.get("lon_a") is not None) and (home_b or ctx.get("tz_b") or ctx.get("lon_b") is not None) else 0.0
         alt = min(3.0, (ev.get("elev") or 0) / 1000)
         five = 1.0 if ctx.get("rounds") == 5 else 0.0
         st_a, st_b = (pa.get("stance") or "").lower(), (pb.get("stance") or "").lower()
@@ -350,6 +353,20 @@ def build(games, preds, profiles, stats):
 
 
 # ------------------------------------------------------------ news and the fight card
+SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv"}
+
+
+def surname(name):
+    """The last real word of a name, skipping Jr./Sr./II ("Raul Rosas Jr." -> "rosas")."""
+    words = [w for w in name.lower().replace(",", " ").split() if w not in SUFFIXES]
+    return words[-1] if words else name.lower().strip()
+
+
+def word(w):
+    """A whole-word pattern that also works for words ending in a dot."""
+    return r"(?<!\w)" + re.escape(w) + r"(?!\w)"
+
+
 def about(title, name, kind_pat, opponent=""):
     """True if the flag in a headline is about this fighter, not someone else named in it.
     The fighter must be named before the flag word with no other fighter in between
@@ -359,17 +376,18 @@ def about(title, name, kind_pat, opponent=""):
     m = re.search(kind_pat, t, re.I)
     if not m:
         return False
-    last = name.split()[-1].lower()
-    pos = [x.start() for x in re.finditer(r"\b" + re.escape(last) + r"\b", t)]
+    last = surname(name)
+    pos = [x.start() for x in re.finditer(word(last), t)]
     if not pos:
         return False
-    opp = opponent.split()[-1].lower() if opponent else ""
+    opp = surname(opponent) if opponent else ""
+    has_opp = (lambda text: bool(re.search(word(opp), text))) if opp else (lambda text: False)
     before = [p for p in pos if p < m.start()]
     if before:
         gap = t[before[-1] + len(last):m.start()]
         # another fighter or "foe/opponent/vs" between the name and the flag means the flag is someone else's
-        return not ((opp and opp in gap) or re.search(r"\b(vs\.?|foe|opponent|rival|against)\b", gap))
-    return not (opp and opp in t) and len(t[m.end():pos[0]].split()) <= 3
+        return not (has_opp(gap) or re.search(r"\b(vs\.?|foe|opponent|rival|against)\b", gap))
+    return not has_opp(t) and len(t[m.end():pos[0]].split()) <= 3
 
 
 _DEAD = set()   # news sources that refused us this run: skip them instead of waiting on retries
@@ -384,7 +402,7 @@ def _rss(url, name, opponent, source, cutoff):
         return []
     text = raw.decode("utf-8", "replace")
     out = []
-    last = name.split()[-1].lower()
+    last = surname(name)
     for item in re.findall(r"<(?:item|entry)>(.*?)</(?:item|entry)>", text, re.S)[:25]:
         title = html.unescape(re.sub(r"<.*?>", "", (re.search(r"<title[^>]*>(.*?)</title>", item, re.S) or [None, ""])[1])).strip()
         link = (re.search(r"<link>(.*?)</link>", item, re.S) or re.search(r'<link href="([^"]+)"', item) or [None, ""])[1].strip()
@@ -437,14 +455,24 @@ def card_changes(bouts, today):
             pass
     first_night = st["since"] == today.isoformat()
     out = {}
+    # a fighter's opponent is remembered with the fight date; old fights are forgotten, so a new booking
+    # months later is not an "opponent change". A change counts only for a fight within 2 weeks of the one before
+    # (same event, or moved a little).
+    for me in list(st["opp"]):
+        v = st["opp"][me]
+        if not isinstance(v, dict) or date.fromisoformat(v["date"]) < today:
+            del st["opp"][me]
     for cid, d, a, b in bouts:
         seen = st["bouts"].setdefault(cid, today.isoformat())
         days = (date.fromisoformat(d) - date.fromisoformat(seen)).days
         short = days if (not first_night and seen > st["since"] and days <= 21) else None
         for me, op in ((a, b), (b, a)):
-            was = st["opp"].get(me)
-            out[me] = {"booked_days": short, "was": was if (was and was != op and not first_night) else None}
-            st["opp"][me] = op
+            prev = st["opp"].get(me)
+            was = None
+            if prev and prev["op"] != op and not first_night and abs((date.fromisoformat(d) - date.fromisoformat(prev["date"])).days) <= 14:
+                was = prev["op"]
+            out[me] = {"booked_days": short, "was": was}
+            st["opp"][me] = {"op": op, "date": d}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with gzip.open(path, "wt") as f:
         json.dump(st, f)
@@ -582,7 +610,7 @@ def run(games, home_edge):
                 "slpm": round(sty["slpm"], 2), "sapm": round(sty["sapm"], 2), "acc": round(sty["acc"], 3), "def": round(sty["def"], 3),
                 "td15": round(sty["td15"], 2), "tddef": round(sty["tddef"], 3), "sub15": round(sty["sub15"], 2),
                 "kd_taken15": round(sty["kdt15"], 2), "ko_losses": S["ko_losses"], "active_2y": S["active"],
-                "home": home, "time_zones": round(tz, 1) if tz is not None else None,
+                "home": home, "time_zones": 0.0 if home else (round(tz, 1) if tz is not None else None),
                 "booked_days": ch.get("booked_days"), "new_opponent_was": ch.get("was"),
                 "news": news_flags(n, b if n == a else a),
             }

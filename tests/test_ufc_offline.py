@@ -62,6 +62,9 @@ def test_about():
     assert not ufc.about("Gamrot vs Hooker off after injury", "Mateusz Gamrot", F["injury"], "Dan Hooker")
     assert not ufc.about('Bilal Hasan cites a "curse" that MMA legend Alexander Volkanovski broke at UFC 3', "Bilal Hasan", F["injury"])
     assert ufc.about("Caio Borralho Says He Fought De Ridder With a Broken Rib", "Caio Borralho", F["injury"], "Someone Else")
+    assert ufc.about("Raul Rosas Jr. pulls out of UFC 320 with injury", "Raul Rosas Jr.", F["pulled out"])
+    # a short opponent surname inside a site name ("Ma" in "MMA Junkie") doesn't cancel a real flag
+    assert ufc.about("Dan Hooker Shows Off Nasty Injury Ahead of UFC Qatar - MMA Junkie", "Dan Hooker", F["injury"], "Wei Ma")
     print("about ok")
 
 
@@ -80,6 +83,9 @@ def test_card_and_travel():
     assert ufc.time_zones("America/New_York", "Asia/Dubai", "2026-11-14") == 9.0
     assert ufc.time_zones("Australia/Sydney", "America/Los_Angeles", "2026-11-14") == 5.0
     assert ufc.time_zones(None, "Asia/Dubai", "2026-11-14", -47.9, 55.3) == 6.9   # Brazil to Abu Dhabi by longitude
+    # the same fighter's next fight months later is a new booking, not an opponent change
+    later = ufc.card_changes([("9", "2027-03-07", "A", "Z")], date(2027, 2, 1))
+    assert later["A"]["was"] is None, later
     print("card and travel ok")
 
 
